@@ -1,0 +1,513 @@
+"""Static evaluation: material + phase-interpolated piece-square tables."""
+
+from constants import WHITE, BLACK, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, FILES
+from bitboard import popcount, iter_bits, lsb
+from attacks import KNIGHT_ATTACKS, bishop_attacks, rook_attacks, queen_attacks
+
+
+# --- Material values, indexed by piece type (king = 0; it cancels) ---
+PIECE_VALUE = (100, 320, 330, 500, 900, 0)
+
+# --- Tapered-eval phase weights, indexed by piece type ---
+_PHASE_WEIGHT = (0, 1, 1, 2, 4, 0)
+PHASE_MAX = 24  # 2*(N+B) + 2*2*R + 2*4*Q over both sides at the start
+
+
+# --- Piece-square tables (reading order, index 0 = a8) ---
+# Each entry is (midgame, endgame). Ported from v2; mg tables are the Simplified
+# Evaluation Function, eg tables are v2's endgame variants (more aggressive pawn
+# advancement, rooks pulled off the edges, king centralised).
+
+_PST_READING = {
+    PAWN: (
+        # midgame
+        (  0,   0,   0,   0,   0,   0,   0,   0,
+          50,  50,  50,  50,  50,  50,  50,  50,
+          10,  10,  20,  30,  30,  20,  10,  10,
+           5,   5,  10,  25,  25,  10,   5,   5,
+           0,   0,   0,  20,  20,   0,   0,   0,
+           5,  -5, -10,   0,   0, -10,  -5,   5,
+           5,  10,  10, -20, -20,  10,  10,   5,
+           0,   0,   0,   0,   0,   0,   0,   0),
+        # endgame
+        (  0,   0,   0,   0,   0,   0,   0,   0,
+         150, 150, 150, 150, 150, 150, 150, 150,
+          75,  75,  75,  75,  75,  75,  75,  75,
+          50,  50,  50,  50,  50,  50,  50,  50,
+          25,  25,  25,  25,  25,  25,  25,  25,
+          10,  10,  10,  10,  10,  10,  10,  10,
+           0,   0,   0,   0,   0,   0,   0,   0,
+           0,   0,   0,   0,   0,   0,   0,   0),
+    ),
+    KNIGHT: (
+        (-50, -40, -30, -30, -30, -30, -40, -50,
+         -40, -20,   0,   0,   0,   0, -20, -40,
+         -30,   0,  10,  15,  15,  10,   0, -30,
+         -30,   5,  15,  20,  20,  15,   5, -30,
+         -30,   0,  15,  20,  20,  15,   0, -30,
+         -30,   5,  10,  15,  15,  10,   5, -30,
+         -40, -20,   0,   5,   5,   0, -20, -40,
+         -50, -40, -30, -30, -30, -30, -40, -50),
+        (-50, -40, -30, -30, -30, -30, -40, -50,
+         -40, -20,   0,   0,   0,   0, -20, -40,
+         -30,   0,  10,  15,  15,  10,   0, -30,
+         -30,   5,  15,  20,  20,  15,   5, -30,
+         -30,   0,  15,  20,  20,  15,   0, -30,
+         -30,   5,  10,  15,  15,  10,   5, -30,
+         -40, -20,   0,   5,   5,   0, -20, -40,
+         -50, -40, -30, -30, -30, -30, -40, -50),
+    ),
+    BISHOP: (
+        (-20, -10, -10, -10, -10, -10, -10, -20,
+         -10,   0,   0,   0,   0,   0,   0, -10,
+         -10,   0,   5,  10,  10,   5,   0, -10,
+         -10,   5,   5,  10,  10,   5,   5, -10,
+         -10,   0,  10,  10,  10,  10,   0, -10,
+         -10,  10,  10,  10,  10,  10,  10, -10,
+         -10,   5,   0,   0,   0,   0,   5, -10,
+         -20, -10, -10, -10, -10, -10, -10, -20),
+        (-20, -10, -10, -10, -10, -10, -10, -20,
+         -10,   0,   0,   0,   0,   0,   0, -10,
+         -10,   0,   5,  10,  10,   5,   0, -10,
+         -10,   0,  10,  10,  10,  10,   0, -10,
+         -10,   0,  10,  10,  10,  10,   0, -10,
+         -10,   0,   5,  10,  10,   5,   0, -10,
+         -10,   0,   0,   0,   0,   0,   0, -10,
+         -20, -10, -10, -10, -10, -10, -10, -20),
+    ),
+    ROOK: (
+        (  0,   0,   0,   0,   0,   0,   0,   0,
+           5,  10,  10,  10,  10,  10,  10,   5,
+          -5,   0,   0,   0,   0,   0,   0,  -5,
+          -5,   0,   0,   0,   0,   0,   0,  -5,
+          -5,   0,   0,   0,   0,   0,   0,  -5,
+          -5,   0,   0,   0,   0,   0,   0,  -5,
+          -5,   0,   0,   0,   0,   0,   0,  -5,
+           0,   0,   0,   5,   5,   0,   0,   0),
+        ( -5,  -5,  -5,  -5,  -5,  -5,  -5,  -5,
+          -5,   0,   0,   0,   0,   0,   0,  -5,
+          -5,   0,   0,   0,   0,   0,   0,  -5,
+          -5,   0,   0,   0,   0,   0,   0,  -5,
+          -5,   0,   0,   0,   0,   0,   0,  -5,
+          -5,   0,   0,   0,   0,   0,   0,  -5,
+          -5,   0,   0,   0,   0,   0,   0,  -5,
+          -5,  -5,  -5,  -5,  -5,  -5,  -5,  -5),
+    ),
+    QUEEN: (
+        (-20, -10, -10,  -5,  -5, -10, -10, -20,
+         -10,   0,   0,   0,   0,   0,   0, -10,
+         -10,   0,   5,   5,   5,   5,   0, -10,
+          -5,   0,   5,   5,   5,   5,   0,  -5,
+           0,   0,   5,   5,   5,   5,   0,  -5,
+         -10,   5,   5,   5,   5,   5,   0, -10,
+         -10,   0,   5,   0,   0,   0,   0, -10,
+         -20, -10, -10,  -5,  -5, -10, -10, -20),
+        (-20, -10, -10,  -5,  -5, -10, -10, -20,
+         -10,   0,   0,   0,   0,   0,   0, -10,
+         -10,   0,   5,   5,   5,   5,   0, -10,
+          -5,   0,   5,   5,   5,   5,   0,  -5,
+           0,   0,   5,   5,   5,   5,   0,  -5,
+         -10,   5,   5,   5,   5,   5,   0, -10,
+         -10,   0,   5,   0,   0,   0,   0, -10,
+         -20, -10, -10,  -5,  -5, -10, -10, -20),
+    ),
+    KING: (
+        (-30, -40, -40, -50, -50, -40, -40, -30,
+         -30, -40, -40, -50, -50, -40, -40, -30,
+         -30, -40, -40, -50, -50, -40, -40, -30,
+         -30, -40, -40, -50, -50, -40, -40, -30,
+         -20, -30, -30, -40, -40, -30, -30, -20,
+         -10, -20, -20, -20, -20, -20, -20, -10,
+          20,  20,   0,   0,   0,   0,  20,  20,
+          20,  30,  10,   0,   0,  10,  30,  20),
+        (  0,  10,  20,  30,  30,  20,  10,   0,
+          10,  20,  30,  40,  40,  30,  20,  10,
+          20,  30,  40,  50,  50,  40,  30,  20,
+          30,  40,  50,  60,  60,  50,  40,  30,
+          30,  40,  50,  60,  60,  50,  40,  30,
+          20,  30,  40,  50,  50,  40,  30,  20,
+          10,  20,  30,  40,  40,  30,  20,  10,
+           0,  10,  20,  30,  30,  20,  10,   0),
+    ),
+}
+
+
+def _build_pst():
+    """Transform reading-order tables into LERF-indexed [color][piece] lookups.
+
+    White piece on square `sq` reads table[sq ^ 56] (vertical flip); black piece
+    reads table[sq]. Returns (MG, EG) where each is [color][piece] -> 64-tuple.
+    """
+    mg = [[None] * 6, [None] * 6]
+    eg = [[None] * 6, [None] * 6]
+    for pt in range(6):
+        mg_tbl, eg_tbl = _PST_READING[pt]
+        mg[WHITE][pt] = tuple(mg_tbl[sq ^ 56] for sq in range(64))
+        eg[WHITE][pt] = tuple(eg_tbl[sq ^ 56] for sq in range(64))
+        mg[BLACK][pt] = tuple(mg_tbl)  # indexing reading-order by LERF sq is the black lookup
+        eg[BLACK][pt] = tuple(eg_tbl)
+    return mg, eg
+
+
+MG, EG = _build_pst()
+
+
+# --- Pawn-structure tables ---
+
+# Passed-pawn bonus by how far the pawn has advanced toward promotion (ported
+# from v2). White pawn on rank r (0=rank1) -> PASSED_BONUS[7 - r]; a Black pawn
+# on rank r -> PASSED_BONUS[r] (so both peak on the 7th-from-home rank).
+PASSED_BONUS = (0, 90, 60, 40, 25, 15, 15, 0)
+
+# Total isolated-pawn penalty indexed by how many isolated pawns a side has
+# (ported from v2; flattens at 4+).
+ISO_PEN = (0, -25, -50, -75, -100, -100, -100, -100, -100)
+DOUBLED_PEN = -12  # per extra pawn sharing a file (v2 had no doubled term)
+
+
+def _build_passed_masks():
+    """PASSED_MASK[color][sq]: the squares an enemy pawn would have to occupy to
+    stop `sq` being a passed pawn — same and adjacent files, all ranks ahead."""
+    masks = [[0] * 64, [0] * 64]
+    for sq in range(64):
+        f, r = sq & 7, sq >> 3
+        files = [ff for ff in (f - 1, f, f + 1) if 0 <= ff < 8]
+        white = 0
+        for rr in range(r + 1, 8):
+            for ff in files:
+                white |= 1 << (rr * 8 + ff)
+        black = 0
+        for rr in range(0, r):
+            for ff in files:
+                black |= 1 << (rr * 8 + ff)
+        masks[WHITE][sq] = white
+        masks[BLACK][sq] = black
+    return masks
+
+
+PASSED_MASK = _build_passed_masks()
+
+# Files adjacent to each file (for isolated-pawn detection).
+ADJACENT_FILES = tuple(
+    (FILES[f - 1] if f > 0 else 0) | (FILES[f + 1] if f < 7 else 0) for f in range(8)
+)
+
+
+# --- King-safety table ---
+
+SHIELD_BONUS = 10  # per friendly pawn shielding the king
+
+
+def _build_king_shield():
+    """KING_SHIELD[color][sq]: the up-to-6 squares immediately in front of a king
+    on `sq` (its file +/- 1, the next two ranks toward the enemy)."""
+    shield = [[0] * 64, [0] * 64]
+    for sq in range(64):
+        f, r = sq & 7, sq >> 3
+        files = [ff for ff in (f - 1, f, f + 1) if 0 <= ff < 8]
+        white = 0
+        for rr in (r + 1, r + 2):
+            if rr < 8:
+                for ff in files:
+                    white |= 1 << (rr * 8 + ff)
+        black = 0
+        for rr in (r - 1, r - 2):
+            if rr >= 0:
+                for ff in files:
+                    black |= 1 << (rr * 8 + ff)
+        shield[WHITE][sq] = white
+        shield[BLACK][sq] = black
+    return shield
+
+
+KING_SHIELD = _build_king_shield()
+
+
+# --- Mop-up tables ---
+
+MOBILITY_WEIGHT = 2  # centipawns per attacked square
+
+# Centre-manhattan-distance: how far a square is from the middle of the board.
+# Used to drive the losing king to the edge/corner. (Symmetric, so it reads the
+# same whether indexed in LERF or reading order.)
+CMD = (
+    6, 5, 4, 3, 3, 4, 5, 6,
+    5, 4, 3, 2, 2, 3, 4, 5,
+    4, 3, 2, 1, 1, 2, 3, 4,
+    3, 2, 1, 0, 0, 1, 2, 3,
+    3, 2, 1, 0, 0, 1, 2, 3,
+    4, 3, 2, 1, 1, 2, 3, 4,
+    5, 4, 3, 2, 2, 3, 4, 5,
+    6, 5, 4, 3, 3, 4, 5, 6,
+)
+CHEB_BONUS = (0, 0, 50, 30, 20, 15, 10, 5)  # by king-to-king Chebyshev distance
+
+
+# --- Components (all from White's perspective) ---
+
+def game_phase(board) -> int:
+    """0 (bare-king endgame) .. PHASE_MAX (full board), from non-pawn material."""
+    phase = 0
+    for color in (WHITE, BLACK):
+        p = board.pieces[color]
+        phase += _PHASE_WEIGHT[KNIGHT] * popcount(p[KNIGHT])
+        phase += _PHASE_WEIGHT[BISHOP] * popcount(p[BISHOP])
+        phase += _PHASE_WEIGHT[ROOK] * popcount(p[ROOK])
+        phase += _PHASE_WEIGHT[QUEEN] * popcount(p[QUEEN])
+    return phase if phase < PHASE_MAX else PHASE_MAX  # cap: promotions can exceed
+
+
+def _material_white(board) -> int:
+    wp = board.pieces[WHITE]
+    bp = board.pieces[BLACK]
+    score = 0
+    for pt in range(5):  # PAWN..QUEEN; king value is 0
+        score += PIECE_VALUE[pt] * (popcount(wp[pt]) - popcount(bp[pt]))
+    return score
+
+
+def _pst_white(board, phase: int) -> int:
+    mg = 0
+    eg = 0
+    for color in (WHITE, BLACK):
+        sign = 1 if color == WHITE else -1
+        mg_c = MG[color]
+        eg_c = EG[color]
+        pieces = board.pieces[color]
+        for pt in range(6):
+            for sq in iter_bits(pieces[pt]):
+                mg += sign * mg_c[pt][sq]
+                eg += sign * eg_c[pt][sq]
+    # Interpolate once at the end (round is symmetric about 0, so the whole
+    # evaluation stays exactly antisymmetric under a colour-flip).
+    return round((mg * phase + eg * (PHASE_MAX - phase)) / PHASE_MAX)
+
+
+def _isolated_count(pawns: int) -> int:
+    count = 0
+    for f in range(8):
+        on_file = pawns & FILES[f]
+        if on_file and not (pawns & ADJACENT_FILES[f]):
+            count += popcount(on_file)
+    return count
+
+
+def _doubled_count(pawns: int) -> int:
+    extra = 0
+    for f in range(8):
+        c = popcount(pawns & FILES[f])
+        if c > 1:
+            extra += c - 1
+    return extra
+
+
+def _pawn_structure_white(board) -> int:
+    wp = board.pieces[WHITE][PAWN]
+    bp = board.pieces[BLACK][PAWN]
+    score = 0
+    # Passed pawns.
+    for sq in iter_bits(wp):
+        if not (PASSED_MASK[WHITE][sq] & bp):
+            score += PASSED_BONUS[7 - (sq >> 3)]
+    for sq in iter_bits(bp):
+        if not (PASSED_MASK[BLACK][sq] & wp):
+            score -= PASSED_BONUS[sq >> 3]
+    # Isolated pawns (penalty scales with how many).
+    score += ISO_PEN[min(_isolated_count(wp), 8)]
+    score -= ISO_PEN[min(_isolated_count(bp), 8)]
+    # Doubled pawns.
+    score += DOUBLED_PEN * (_doubled_count(wp) - _doubled_count(bp))
+    return score
+
+
+def _mobility_white(board) -> int:
+    occ = board.all_occupied
+    score = 0
+    for color, sign in ((WHITE, 1), (BLACK, -1)):
+        own = board.occupied[color]
+        p = board.pieces[color]
+        m = 0
+        for sq in iter_bits(p[KNIGHT]):
+            m += popcount(KNIGHT_ATTACKS[sq] & ~own)
+        for sq in iter_bits(p[BISHOP]):
+            m += popcount(bishop_attacks(sq, occ) & ~own)
+        for sq in iter_bits(p[ROOK]):
+            m += popcount(rook_attacks(sq, occ) & ~own)
+        for sq in iter_bits(p[QUEEN]):
+            m += popcount(queen_attacks(sq, occ) & ~own)
+        score += sign * m
+    return score * MOBILITY_WEIGHT
+
+
+def _king_safety_white(board, phase: int) -> int:
+    if phase == 0:
+        return 0
+    total = 0
+    for color, sign in ((WHITE, 1), (BLACK, -1)):
+        ksq = lsb(board.pieces[color][KING])
+        shield = KING_SHIELD[color][ksq] & board.pieces[color][PAWN]
+        total += sign * popcount(shield) * SHIELD_BONUS
+    # Fades out toward the endgame (round keeps it antisymmetric under a flip).
+    return round(total * phase / PHASE_MAX)
+
+
+def _manhattan(a: int, b: int) -> int:
+    return abs((a & 7) - (b & 7)) + abs((a >> 3) - (b >> 3))
+
+
+def _chebyshev(a: int, b: int) -> int:
+    return max(abs((a & 7) - (b & 7)), abs((a >> 3) - (b >> 3)))
+
+
+def _mopup_white(board) -> int:
+    """Endgame king-driving term — only active in won, pawnless, ≤5-piece
+    positions, where PST/material alone don't know how to force mate."""
+    if board.pieces[WHITE][PAWN] or board.pieces[BLACK][PAWN]:
+        return 0
+    if popcount(board.all_occupied) > 5:
+        return 0
+    mat = _material_white(board)
+    if abs(mat) < 500:
+        return 0
+    wk = lsb(board.pieces[WHITE][KING])
+    bk = lsb(board.pieces[BLACK][KING])
+    md = _manhattan(wk, bk)
+    cd = _chebyshev(wk, bk)
+    if mat > 0:
+        val = CMD[bk] * 5 + (14 - md) * 3 + CHEB_BONUS[cd]
+        return val
+    else:
+        val = CMD[wk] * 5 + (14 - md) * 3 + CHEB_BONUS[cd]
+        return -val
+
+
+# --- Public API ---
+
+def evaluate_white(board) -> int:
+    """Static score from White's perspective (positive = better for White)."""
+    phase = game_phase(board)
+    score = _material_white(board)
+    score += _pst_white(board, phase)
+    score += _pawn_structure_white(board)
+    score += _mobility_white(board)
+    score += _king_safety_white(board, phase)
+    score += _mopup_white(board)
+    return score
+
+
+def evaluate(board) -> int:
+    """Static score relative to the side to move (negamax convention)."""
+    score = evaluate_white(board)
+    return score if board.side == WHITE else -score
+
+
+# --- Self-test ------------------------------------------------------------
+
+def _mirror_fen(fen: str) -> str:
+    """Vertical colour-mirror of a FEN: flip ranks, swap colours and side.
+
+    The evaluation must be exactly antisymmetric under this transform — a clean
+    check that the white/black PST mapping and the material sign are correct.
+    """
+    parts = fen.split()
+    ranks = parts[0].split("/")[::-1]
+    placement = "/".join("".join(c.swapcase() for c in r) for r in ranks)
+    side = "b" if parts[1] == "w" else "w"
+    castling = parts[2].swapcase() if parts[2] != "-" else "-"
+    if len(parts) > 3 and parts[3] != "-":
+        ep = parts[3][0] + str(9 - int(parts[3][1]))
+    else:
+        ep = "-"
+    rest = parts[4:] if len(parts) > 4 else []
+    return " ".join([placement, side, castling, ep] + rest)
+
+
+def _run_self_test() -> bool:
+    from board import STARTING_FEN, Board
+
+    ok = True
+
+    def check(name, cond):
+        nonlocal ok
+        ok &= bool(cond)
+        print(f"  {'ok  ' if cond else 'FAIL'}  {name}")
+
+    # 1. Starting position is perfectly balanced.
+    start = Board(STARTING_FEN)
+    check("start: evaluate_white == 0", evaluate_white(start) == 0)
+    check("start: evaluate == 0", evaluate(start) == 0)
+
+    # 2. Colour-mirror antisymmetry across a range of positions (the last is a
+    #    pawnless winning endgame, so it also exercises the mop-up sign flip).
+    fens = [
+        STARTING_FEN,
+        "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+        "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
+        "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+        "k7/8/2K5/8/8/8/8/4Q3 w - - 0 1",
+    ]
+    for fen in fens:
+        b = Board(fen)
+        m = Board(_mirror_fen(fen))
+        check(f"mirror antisymmetric: {fen[:24]}…",
+              evaluate_white(b) == -evaluate_white(m))
+        check(f"mirror same-to-move:  {fen[:24]}…",
+              evaluate(b) == evaluate(m))
+
+    # 3. Material dominates: White up a queen is clearly winning for White.
+    upq = Board("rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
+    check("white up a queen: evaluate_white > 800", evaluate_white(upq) > 800)
+
+    # 4. After 1.e4 White's centre pawn gains, so White is slightly better.
+    e4 = Board("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1")
+    check("after 1.e4: evaluate_white > 0", evaluate_white(e4) > 0)
+
+    # 5. PST: a centralised knight beats a cornered one.
+    center = Board("4k3/8/8/3N4/8/8/8/4K3 w - - 0 1")
+    corner = Board("N3k3/8/8/8/8/8/8/4K3 w - - 0 1")
+    check("knight d5 > knight a8", evaluate_white(center) > evaluate_white(corner))
+
+    # 6. Passed pawns: a lone advanced pawn (passed +40, isolated -25) = +15;
+    #    blocking it with an enemy pawn ahead removes the passed bonus.
+    passed = Board("4k3/8/8/4P3/8/8/8/4K3 w - - 0 1")
+    blocked = Board("4k3/4p3/8/4P3/8/8/8/4K3 w - - 0 1")
+    check("passed pawn: structure term == +15", _pawn_structure_white(passed) == 15)
+    check("passed pawn: blocked scores lower",
+          _pawn_structure_white(passed) > _pawn_structure_white(blocked))
+
+    # 7. Isolated / doubled pawn counters.
+    connected = Board("4k3/8/8/8/3PP3/8/8/4K3 w - - 0 1")
+    isolated = Board("4k3/8/8/8/P7/8/8/4K3 w - - 0 1")
+    check("isolated count: d4+e4 == 0", _isolated_count(connected.pieces[WHITE][PAWN]) == 0)
+    check("isolated count: lone a4 == 1", _isolated_count(isolated.pieces[WHITE][PAWN]) == 1)
+    doubled = Board("4k3/8/8/8/4P3/4P3/8/4K3 w - - 0 1")
+    check("doubled count: e4+e3 == 1", _doubled_count(doubled.pieces[WHITE][PAWN]) == 1)
+    check("doubled count: d4+e3 == 0", _doubled_count(connected.pieces[WHITE][PAWN]) == 0)
+
+    # 8. Mobility: a centralised knight attacks more squares than a cornered one.
+    check("mobility: knight d5 > knight a8",
+          _mobility_white(center) > _mobility_white(corner))
+
+    # 9. King safety: an intact pawn shield beats a bare king (queens on, so the
+    #    term is active). Compared via the term directly to isolate it.
+    shielded = Board("3q2k1/8/8/8/8/8/5PPP/3Q2K1 w - - 0 1")
+    bare = Board("3q2k1/8/8/8/8/8/8/3Q2K1 w - - 0 1")
+    check("king safety: shield > exposed",
+          _king_safety_white(shielded, game_phase(shielded))
+          > _king_safety_white(bare, game_phase(bare)))
+
+    # 10. Mop-up: in a won K+Q-v-K endgame, driving the bare king to the corner
+    #     scores higher than leaving it centralised, and it's off when not winning.
+    edge = Board("k7/8/2K5/8/8/8/8/4Q3 w - - 0 1")
+    centre_k = Board("8/8/8/8/4k3/8/2K5/4Q3 w - - 0 1")
+    check("mop-up: drives losing king to edge", _mopup_white(edge) > _mopup_white(centre_k))
+    check("mop-up: active (non-zero) when winning", _mopup_white(edge) > 0)
+    check("mop-up: off when material is level", _mopup_white(Board("4k3/8/8/8/8/8/8/4K3 w - - 0 1")) == 0)
+
+    print(f"\n{'ALL PASS' if ok else 'FAILURES PRESENT'}")
+    return ok
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(0 if _run_self_test() else 1)
