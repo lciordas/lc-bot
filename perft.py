@@ -1,8 +1,4 @@
-"""Perft (performance test) — counts legal-move tree nodes at a given depth.
-
-Perft is the standard correctness check for a move generator: published node
-counts exist for many positions, so any disagreement pinpoints a bug.
-"""
+"""Perft: count leaf nodes of the legal move tree to check the move generator."""
 
 import sys
 import time

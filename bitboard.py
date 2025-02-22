@@ -2,7 +2,7 @@
 
 
 def popcount(bb: int) -> int:
-    return bb.bit_count()  # native C popcount (Python 3.10+); ~5x bin().count("1")
+    return bb.bit_count()  # Python 3.10+; ~5x faster than bin().count("1")
 
 
 def lsb(bb: int) -> int:

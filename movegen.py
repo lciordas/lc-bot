@@ -40,19 +40,15 @@ def generate_pseudo_legal_moves(board):
         promo_rank = RANKS[0]
         push = -8
 
-    # Pawn pushes (non-promo).
     for to_sq in iter_bits(single & ~promo_rank):
         moves.append(encode_move(to_sq - push, to_sq, FLAG_QUIET))
-    # Pawn pushes (promo).
     for to_sq in iter_bits(single & promo_rank):
         from_sq = to_sq - push
         for f in _PROMO_QUIET:
             moves.append(encode_move(from_sq, to_sq, f))
-    # Double pushes.
     for to_sq in iter_bits(double):
         moves.append(encode_move(to_sq - 2 * push, to_sq, FLAG_DOUBLE_PUSH))
 
-    # Pawn captures (per-pawn so we get from-square cheaply).
     for from_sq in iter_bits(pawns):
         attacks = PAWN_ATTACKS[us][from_sq] & their_pieces
         for to_sq in iter_bits(attacks):
@@ -62,7 +58,6 @@ def generate_pseudo_legal_moves(board):
             else:
                 moves.append(encode_move(from_sq, to_sq, FLAG_CAPTURE))
 
-    # En passant.
     if board.ep_square >= 0:
         attackers = PAWN_ATTACKS[them][board.ep_square] & pawns
         for from_sq in iter_bits(attackers):
@@ -103,8 +98,7 @@ def generate_pseudo_legal_moves(board):
             flag = FLAG_CAPTURE if (1 << to_sq) & their_pieces else FLAG_QUIET
             moves.append(encode_move(from_sq, to_sq, flag))
 
-    # Castling (pre-filtered for legality: squares between rook/king empty,
-    # king's three squares not attacked).
+    # Castling: path empty and king's three squares not attacked.
     if us == WHITE:
         if (board.castling & WHITE_KING_SIDE
                 and not (all_pieces & ((1 << 5) | (1 << 6)))
@@ -140,7 +134,6 @@ def generate_legal_moves(board):
     legal = []
     for m in pseudo:
         board.make_move(m)
-        # The side that just moved is the one *not* currently to move.
         mover = board.side ^ 1
         king_bb = board.pieces[mover][KING]
         if king_bb and not board.is_square_attacked(lsb(king_bb), board.side):

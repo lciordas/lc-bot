@@ -1,3 +1,6 @@
+"""Negamax alpha-beta search: PVS, quiescence, transposition table, null-move,
+LMR, futility/razoring, singular extensions, aspiration windows."""
+
 import sys
 import time
 
@@ -9,6 +12,7 @@ from move import (
 )
 from evaluation import evaluate, PIECE_VALUE
 from constants import PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING
+from config import EngineConfig
 
 sys.setrecursionlimit(10000)
 
@@ -25,11 +29,12 @@ _MVV = (100, 320, 330, 500, 900, 20000)  # king last so K-captures (illegal) nev
 
 
 class Searcher:
-    """Holds search state across iterative-deepening iterations and (optionally)
-    across moves in a game — the transposition table is reused."""
+    """Search state; the TT persists across searches."""
 
-    def __init__(self):
+    def __init__(self, config=None):
+        self.config = config or EngineConfig()
         self.tt = {}
+        self._tt_max_entries = self._compute_tt_cap(self.config.tt_size_mb)
         self.nodes = 0
         self.stop = False
         self.start = 0.0
@@ -41,10 +46,28 @@ class Searcher:
         self.killers = [[0, 0] for _ in range(MAX_PLY)]
         self.history = [[0] * 64 for _ in range(64)]
 
+    @staticmethod
+    def _compute_tt_cap(tt_size_mb: int) -> int:
+        """Rough entry-count budget for a `tt_size_mb`-sized table (~120 bytes
+        per (depth, flag, score, move) tuple + dict-entry overhead, estimated;
+        exact accuracy isn't the point — bounding unbounded growth is)."""
+        return max(64, (tt_size_mb * 1024 * 1024) // 120)
+
+    def resize_tt(self, tt_size_mb: int) -> None:
+        """Apply a new Hash size (e.g. from a UCI `setoption name Hash`):"""
+        self.config.tt_size_mb = tt_size_mb
+        self._tt_max_entries = self._compute_tt_cap(tt_size_mb)
+        self.tt.clear()
+
     # --- public entry ---
 
-    def search(self, board, max_depth=64, movetime=None, max_nodes=None, info=False):
-        """Iteratively deepen until a limit is hit. Returns (best_move, score)."""
+    def search(self, board, max_depth=64, movetime=None, max_nodes=None, info=False, on_info=None):
+        """Iteratively deepen until a limit is hit. Returns (best_move, score).
+
+        `on_info(depth, score, nodes, elapsed, pv)` is called after every
+        completed iteration if given — the hook `uci.py` uses to emit UCI
+        `info` lines without this module needing to know about UCI at all.
+        """
         self.start = time.perf_counter()
         self.time_limit = movetime
         self.max_nodes = max_nodes
@@ -76,6 +99,9 @@ class Searcher:
 
             if info:
                 self._print_info(board, depth, score)
+            if on_info is not None:
+                elapsed = time.perf_counter() - self.start
+                on_info(depth, score, self.nodes, elapsed, self._principal_variation(board))
             if abs(score) >= MATE_THRESHOLD:
                 break  # forced mate — no point searching deeper
             if movetime is not None and (time.perf_counter() - self.start) >= movetime * 0.5:
@@ -122,9 +148,7 @@ class Searcher:
                 if alpha >= beta:
                     return s
 
-        # Null-move pruning: give the opponent a free move; if our position is
-        # still good enough to fail high, prune. Skipped in PV nodes, in check,
-        # near mate, and when the side to move has only pawns (zugzwang risk).
+        # Null-move pruning. Skipped with only pawns (zugzwang).
         if (not pv_node and not in_check and depth >= 3 and ply > 0
                 and beta < MATE_THRESHOLD and self._has_non_pawn_material(board)):
             r = 3 if depth >= 6 else 2
@@ -199,8 +223,7 @@ class Searcher:
             return evaluate(board)
 
         if board.in_check():
-            # In check we can't stand pat — search every evasion (else we might
-            # call a lost-to-mate position "fine").
+            # No stand-pat in check; search every evasion.
             moves = generate_legal_moves(board)
             if not moves:
                 return -MATE + ply
@@ -300,6 +323,8 @@ class Searcher:
             score -= ply
         prev = self.tt.get(key)
         if prev is None or depth >= prev[0]:  # depth-preferred replacement
+            if key not in self.tt and len(self.tt) >= self._tt_max_entries:
+                self.tt.clear()
             self.tt[key] = (depth, flag, score, move)
 
     @staticmethod
@@ -415,7 +440,7 @@ def _run_self_test() -> bool:
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "demo":
-        # `python3 search.py demo [fen]` — watch iterative deepening on a position.
+        # `python3 search.py demo [fen]`: watch iterative deepening.
         fen = " ".join(sys.argv[2:]) if len(sys.argv) > 2 else \
             "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5Q2/PPPP1PPP/RNB1K1NR w KQkq - 0 1"
         board = Board(fen)

@@ -1,4 +1,8 @@
-"""Zobrist hashing — a 64-bit key identifying a position."""
+"""Zobrist keys for position hashing (TT lookups and repetition detection).
+
+Board.make_move/unmake_move update the key incrementally. The PRNG has a fixed
+seed so keys, and therefore searches, are reproducible.
+"""
 
 import random
 
@@ -13,16 +17,16 @@ def _rand64() -> int:
 
 # PIECE_KEYS[color][piece_type][square]
 PIECE_KEYS = [[[_rand64() for _ in range(64)] for _ in range(6)] for _ in range(2)]
-# One key per castling-rights value (the 4-bit mask, 0..15).
+# Indexed by the 4-bit castling mask.
 CASTLE_KEYS = [_rand64() for _ in range(16)]
-# One key per en-passant file (only the file is hash-relevant).
+# Indexed by en-passant file.
 EP_KEYS = [_rand64() for _ in range(8)]
-# XORed in whenever it is Black to move.
+# XORed in when Black is to move.
 SIDE_KEY = _rand64()
 
 
 def compute_hash(board) -> int:
-    """Rebuild the full Zobrist key from board state (slow; not on the hot path)."""
+    """Compute the key from scratch. Slow; used for setup and tests."""
     h = 0
     for color in (WHITE, BLACK):
         for pt in range(6):

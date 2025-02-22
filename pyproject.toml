@@ -1,0 +1,21 @@
+[project]
+name = "final-engine"
+version = "0.1.0"
+description = "Pure-Python bitboard chess engine."
+authors = [
+    { name = "Lucas Ciordas", email = "22lciordas@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "chess>=1.11.1",
+    "pytest>=8.0.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

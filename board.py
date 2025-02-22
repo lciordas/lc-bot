@@ -1,4 +1,8 @@
-"""Board representation, FEN I/O, make / unmake move."""
+"""Bitboard board: FEN I/O, make/unmake, draw detection.
+
+history holds (move, captured_pt, captured_sq, castling, ep_square, halfmove,
+zobrist) per ply, with the state from before the move.
+"""
 
 from constants import (
     A1, A8, BISHOP, BLACK, E1, E8, H1, H8, KING, KNIGHT, PAWN, QUEEN, ROOK, WHITE,
@@ -37,9 +41,7 @@ _UNICODE_PIECES = {
     (BLACK, 3): "♜", (BLACK, 4): "♛", (BLACK, 5): "♚",
 }
 
-# Castling-rights mask: when a piece moves from / captures on one of these
-# squares, AND the current castling rights with the mask to clear the
-# now-impossible right. Squares not listed leave rights unchanged.
+# AND into castling rights for any move from or to the square.
 _CASTLING_MASK = [FULL_BB] * 64
 _CASTLING_MASK[A1] = ~WHITE_QUEEN_SIDE & FULL_BB
 _CASTLING_MASK[H1] = ~WHITE_KING_SIDE & FULL_BB
@@ -177,14 +179,12 @@ class Board:
         from_bb = 1 << from_sq
         to_bb = 1 << to_sq
 
-        # Identify moving piece.
         moving_piece = -1
         for pt in range(6):
             if self.pieces[us][pt] & from_bb:
                 moving_piece = pt
                 break
 
-        # Identify captured piece (en passant captures from a different square).
         captured_piece = -1
         captured_sq = to_sq
         if flag == FLAG_EN_PASSANT:
@@ -199,8 +199,7 @@ class Board:
         old_castling = self.castling
         old_ep = self.ep_square
 
-        # Save history snapshot for unmake (incl. the pre-move Zobrist key, which
-        # unmake restores directly — cheaper and safer than reversing the XORs).
+        # unmake restores the key from here instead of reversing the XORs.
         self.history.append((
             move, captured_piece, captured_sq,
             old_castling, old_ep, self.halfmove, self.zobrist,
@@ -208,19 +207,16 @@ class Board:
 
         key = self.zobrist
 
-        # Remove moving piece from origin.
         self.pieces[us][moving_piece] ^= from_bb
         self.occupied[us] ^= from_bb
         key ^= PIECE_KEYS[us][moving_piece][from_sq]
 
-        # Remove captured piece (if any).
         if captured_piece >= 0:
             cap_bb = 1 << captured_sq
             self.pieces[them][captured_piece] ^= cap_bb
             self.occupied[them] ^= cap_bb
             key ^= PIECE_KEYS[them][captured_piece][captured_sq]
 
-        # Place moving piece on destination (handle promotions).
         if flag >= FLAG_PROMO_N:
             promo_pt = PROMO_FLAG_TO_PIECE[flag]
             self.pieces[us][promo_pt] ^= to_bb
@@ -230,7 +226,6 @@ class Board:
             key ^= PIECE_KEYS[us][moving_piece][to_sq]
         self.occupied[us] ^= to_bb
 
-        # Castling: move the rook too.
         if flag == FLAG_KING_CASTLE:
             if us == WHITE:
                 self.pieces[us][ROOK] ^= (1 << H1) | (1 << 5)
@@ -250,15 +245,11 @@ class Board:
                 self.occupied[us] ^= (1 << A8) | (1 << 59)
                 key ^= PIECE_KEYS[us][ROOK][A8] ^ PIECE_KEYS[us][ROOK][59]
 
-        # Update castling rights from origin AND destination squares.
-        # _CASTLING_MASK is FULL_BB for irrelevant squares, so this is a no-op
-        # for moves not touching a1/h1/e1/a8/h8/e8.
         self.castling &= _CASTLING_MASK[from_sq]
         self.castling &= _CASTLING_MASK[to_sq]
         if self.castling != old_castling:
             key ^= CASTLE_KEYS[old_castling] ^ CASTLE_KEYS[self.castling]
 
-        # En-passant target square (only set after a double pawn push).
         if old_ep >= 0:
             key ^= EP_KEYS[old_ep & 7]
         if flag == FLAG_DOUBLE_PUSH:
@@ -267,7 +258,6 @@ class Board:
         else:
             self.ep_square = -1
 
-        # 50-move clock.
         if moving_piece == PAWN or captured_piece >= 0:
             self.halfmove = 0
         else:
@@ -292,13 +282,11 @@ class Board:
         from_bb = 1 << from_sq
         to_bb = 1 << to_sq
 
-        # Reverse the destination placement.
         if flag >= FLAG_PROMO_N:
             promo_pt = PROMO_FLAG_TO_PIECE[flag]
             self.pieces[us][promo_pt] ^= to_bb
             self.pieces[us][PAWN] ^= from_bb
         else:
-            # Find moving piece type by its current location at to_sq.
             moving_piece = -1
             for pt in range(6):
                 if self.pieces[us][pt] & to_bb:
@@ -309,13 +297,11 @@ class Board:
         self.occupied[us] ^= to_bb
         self.occupied[us] ^= from_bb
 
-        # Restore captured piece.
         if captured_piece >= 0:
             cap_bb = 1 << captured_sq
             self.pieces[them][captured_piece] ^= cap_bb
             self.occupied[them] ^= cap_bb
 
-        # Undo the rook's part of castling.
         if flag == FLAG_KING_CASTLE:
             if us == WHITE:
                 self.pieces[us][ROOK] ^= (1 << H1) | (1 << 5)
@@ -360,16 +346,13 @@ class Board:
     # --- draw detection ---
 
     def is_repetition(self) -> bool:
-        """True if the current position has occurred earlier in the game/search.
+        """True if the position occurred before since the last irreversible move.
 
-        A single earlier occurrence is enough — within a search line it means the
-        side to move can force a repetition draw, so engines treat it as a draw.
-        Only the reversible window (since the last pawn move / capture) is scanned.
+        One earlier occurrence counts as a draw for search purposes.
         """
         key = self.zobrist
         hist = self.history
-        # Same-side-to-move positions sit two plies apart; the nearest candidate
-        # is the grandparent (history[-2]). Stored key at [6] is that position's.
+        # Same side to move only: step two plies at a time from history[-2].
         i = len(hist) - 2
         stop = len(hist) - self.halfmove
         while i >= 0 and i >= stop:
@@ -379,7 +362,7 @@ class Board:
         return False
 
     def is_insufficient_material(self) -> bool:
-        """True for K vs K, K+N vs K, K+B vs K — no forced mate possible."""
+        """K vs K, K+N vs K, or K+B vs K."""
         for c in (WHITE, BLACK):
             if self.pieces[c][PAWN] or self.pieces[c][ROOK] or self.pieces[c][QUEEN]:
                 return False
@@ -388,7 +371,7 @@ class Board:
         return minors <= 1
 
     def is_draw(self) -> bool:
-        """50-move rule, threefold-style repetition, or insufficient material."""
+        """50-move rule, repetition, or insufficient material."""
         if self.halfmove >= 100:
             return True
         if self.is_repetition():

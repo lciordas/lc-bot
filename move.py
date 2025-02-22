@@ -1,4 +1,7 @@
-"""16-bit move encoding."""
+"""16-bit move encoding: bits 0-5 from square, 6-11 to square, 12-15 flag.
+
+Promotion flags are >= 8; promotion captures are >= 12.
+"""
 
 from constants import SQUARE_NAMES
 
@@ -26,8 +29,7 @@ PROMO_FLAGS_CAPTURE = (
     FLAG_PROMO_N_CAPTURE,
 )
 
-# Maps a promotion flag to the resulting piece type (PAWN=0, KNIGHT=1, ...).
-# (flag - FLAG_PROMO_N) & 3 gives 0..3 for N/B/R/Q.
+# Promotion flag -> piece type. (flag - FLAG_PROMO_N) & 3 gives 0..3 for N/B/R/Q.
 PROMO_FLAG_TO_PIECE = {
     FLAG_PROMO_N: 1, FLAG_PROMO_B: 2, FLAG_PROMO_R: 3, FLAG_PROMO_Q: 4,
     FLAG_PROMO_N_CAPTURE: 1, FLAG_PROMO_B_CAPTURE: 2,
@@ -53,7 +55,6 @@ def move_flag(m: int) -> int:
 
 def is_capture(m: int) -> bool:
     f = move_flag(m)
-    # Capture bit is bit 2 of the flag (FLAG_CAPTURE=4) OR the high promo-capture flags (>=12).
     return f == FLAG_CAPTURE or f == FLAG_EN_PASSANT or f >= FLAG_PROMO_N_CAPTURE
 
 

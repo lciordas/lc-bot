@@ -1,4 +1,7 @@
-"""Pre-computed attack tables — leapers by lookup, sliders by magic bitboards."""
+"""Attack tables: lookup tables for leapers, magic bitboards for sliders.
+
+Python ints don't wrap, so `occ * magic` is masked with `& _FULL` before the shift.
+"""
 
 import random
 
@@ -90,8 +93,7 @@ def _ray_attacks(sq: int, dirs, occupancy: int) -> int:
 # --- Magic bitboards ---
 
 def _relevant_mask(sq: int, dirs) -> int:
-    """The occupancy bits that matter for `sq`: squares along each ray EXCLUDING
-    the final edge square (a blocker there can't change which squares are hit)."""
+    """Occupancy bits that matter for `sq`: each ray minus its edge square."""
     mask = 0
     sf, sr = sq & 7, sq >> 3
     for df, dr in dirs:
@@ -99,7 +101,7 @@ def _relevant_mask(sq: int, dirs) -> int:
         while 0 <= f < 8 and 0 <= r < 8:
             nf, nr = f + df, r + dr
             if not (0 <= nf < 8 and 0 <= nr < 8):
-                break  # (f, r) is the edge in this direction — exclude it
+                break  # edge square
             mask |= 1 << (r * 8 + f)
             f, r = nf, nr
     return mask
@@ -116,8 +118,7 @@ def _subsets(mask: int):
 
 
 def _find_magic(sq: int, dirs, rng) -> tuple:
-    """Find a magic for `sq` that maps every occupancy subset collision-free.
-    Returns (magic, shift, mask, table)."""
+    """Search for a collision-free magic for `sq`. Returns (magic, shift, mask, table)."""
     mask = _relevant_mask(sq, dirs)
     bits = popcount(mask)
     shift = 64 - bits
@@ -125,7 +126,7 @@ def _find_magic(sq: int, dirs, rng) -> tuple:
     atts = [_ray_attacks(sq, dirs, o) for o in occs]
     size = 1 << bits
     for _ in range(10_000_000):
-        # Sparse candidate (few set bits) — far likelier to be a valid magic.
+        # Sparse candidates are far more likely to work.
         magic = rng.getrandbits(64) & rng.getrandbits(64) & rng.getrandbits(64)
         if popcount((mask * magic) & 0xFF00000000000000) < 6:
             continue
@@ -155,9 +156,7 @@ def _build_magics(dirs, rng):
     return magics, shifts, masks, tables
 
 
-# Magics found once by `_build_magics` (seed 0xBEEF1234) and embedded here, so
-# import only has to fill the tables — not search. Regenerate with
-# `python3 attacks.py regen`. _build_from_magics re-verifies them on every import.
+# Found by _build_magics with seed 0xBEEF1234; regenerate with `python3 attacks.py regen`.
 _ROOK_MAGIC = (
     0x0080008040002011, 0x0300208302400010, 0x8100200011000840, 0x0480044800100080,
     0x4380040028000280, 0x0200020064082110, 0x0080020001000080, 0x0600040041008022,
@@ -197,8 +196,7 @@ _BISHOP_MAGIC = (
 
 
 def _build_from_magics(dirs, magics):
-    """Build (shifts, masks, tables) from embedded magics — fills each per-square
-    table and re-verifies the magic is collision-free (guards against a bad paste)."""
+    """Build (shifts, masks, tables) from the embedded magics, checking for collisions."""
     shifts = [0] * 64
     masks = [0] * 64
     tables = [None] * 64
@@ -238,8 +236,7 @@ def queen_attacks(sq: int, occupancy: int) -> int:
 # --- Self-test: magic lookups must equal the ray reference everywhere ---
 
 def attacks_selftest(samples_per_square: int = 200) -> bool:
-    """Verify magic attacks == ray attacks for empty/full boards and random
-    occupancies on every square. Returns True iff all match."""
+    """Check magic lookups against the ray walker on every square. True iff all match."""
     rng = random.Random(0xA77AC)
     ok = True
     for sq in range(64):
@@ -257,7 +254,6 @@ if __name__ == "__main__":
     import sys
     import time
     if len(sys.argv) > 1 and sys.argv[1] == "regen":
-        # Re-find magics with the embedded seed and print them as constants.
         rng = random.Random(0xBEEF1234)
         rook_magics = _build_magics(_ROOK_DIRS, rng)[0]
         bishop_magics = _build_magics(_BISHOP_DIRS, rng)[0]
