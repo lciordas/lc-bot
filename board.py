@@ -143,10 +143,14 @@ class Board:
         lines.append("  a b c d e f g h")
         return "\n".join(lines)
 
-    def is_square_attacked(self, sq: int, by_color: int) -> bool:
-        """Return True if any piece of `by_color` attacks `sq`."""
-        # Pawn: a pawn of (1-by_color) on sq would attack the same squares that
-        # by_color's pawns must be on to attack sq.
+    def is_square_attacked(self, sq: int, by_color: int, occupied: int = None) -> bool:
+        """True if any piece of `by_color` attacks `sq`.
+
+        `occupied` overrides the occupancy for slider checks only (movegen uses it
+        to test king escape squares with the king removed)."""
+        if occupied is None:
+            occupied = self.all_occupied
+        # Reverse lookup: where by_color's pawns must stand to attack sq.
         if PAWN_ATTACKS[by_color ^ 1][sq] & self.pieces[by_color][PAWN]:
             return True
         if KNIGHT_ATTACKS[sq] & self.pieces[by_color][KNIGHT]:
@@ -154,10 +158,10 @@ class Board:
         if KING_ATTACKS[sq] & self.pieces[by_color][KING]:
             return True
         diag = self.pieces[by_color][2] | self.pieces[by_color][4]  # bishop | queen
-        if diag and bishop_attacks(sq, self.all_occupied) & diag:
+        if diag and bishop_attacks(sq, occupied) & diag:
             return True
         ortho = self.pieces[by_color][ROOK] | self.pieces[by_color][4]  # rook | queen
-        if ortho and rook_attacks(sq, self.all_occupied) & ortho:
+        if ortho and rook_attacks(sq, occupied) & ortho:
             return True
         return False
 

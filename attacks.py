@@ -90,6 +90,26 @@ def _ray_attacks(sq: int, dirs, occupancy: int) -> int:
     return attacks
 
 
+def _build_squares_between():
+    """SQUARES_BETWEEN[a][b]: squares strictly between a and b on a shared line, else 0."""
+    table = [[0] * 64 for _ in range(64)]
+    for sq in range(64):
+        sf, sr = sq & 7, sq >> 3
+        for df, dr in _ROOK_DIRS + _BISHOP_DIRS:
+            between = 0
+            f, r = sf + df, sr + dr
+            while 0 <= f < 8 and 0 <= r < 8:
+                t = r * 8 + f
+                table[sq][t] = between
+                between |= (1 << t)
+                f += df
+                r += dr
+    return table
+
+
+SQUARES_BETWEEN = _build_squares_between()
+
+
 # --- Magic bitboards ---
 
 def _relevant_mask(sq: int, dirs) -> int:

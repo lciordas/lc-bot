@@ -1,18 +1,25 @@
-"""Pseudo-legal and legal move generation."""
+"""Move generation: pseudo-legal moves, then a check/pin filter for legality.
+
+Castling is fully checked at generation time. _generate_legal_moves_reference is
+the slow make/unmake version, used by tests as an oracle.
+"""
 
 from constants import (
     A1, A8, BISHOP, BLACK, FULL_BB, H1, H8, KING, KNIGHT, PAWN, QUEEN, ROOK,
     RANKS, WHITE, BLACK_KING_SIDE, BLACK_QUEEN_SIDE,
     WHITE_KING_SIDE, WHITE_QUEEN_SIDE,
 )
-from bitboard import iter_bits, lsb
+from bitboard import iter_bits, lsb, popcount
 from move import (
     FLAG_CAPTURE, FLAG_DOUBLE_PUSH, FLAG_EN_PASSANT, FLAG_KING_CASTLE,
     FLAG_PROMO_B, FLAG_PROMO_B_CAPTURE, FLAG_PROMO_N, FLAG_PROMO_N_CAPTURE,
     FLAG_PROMO_Q, FLAG_PROMO_Q_CAPTURE, FLAG_PROMO_R, FLAG_PROMO_R_CAPTURE,
-    FLAG_QUEEN_CASTLE, FLAG_QUIET, encode_move,
+    FLAG_QUEEN_CASTLE, FLAG_QUIET, encode_move, move_flag, move_from, move_to,
 )
-from attacks import KING_ATTACKS, KNIGHT_ATTACKS, PAWN_ATTACKS, bishop_attacks, queen_attacks, rook_attacks
+from attacks import (
+    KING_ATTACKS, KNIGHT_ATTACKS, PAWN_ATTACKS, SQUARES_BETWEEN,
+    bishop_attacks, queen_attacks, rook_attacks,
+)
 
 
 _PROMO_QUIET = (FLAG_PROMO_Q, FLAG_PROMO_R, FLAG_PROMO_B, FLAG_PROMO_N)
@@ -129,7 +136,8 @@ def generate_pseudo_legal_moves(board):
     return moves
 
 
-def generate_legal_moves(board):
+def _generate_legal_moves_reference(board):
+    """Slow make/unmake legality filter; test oracle for generate_legal_moves."""
     pseudo = generate_pseudo_legal_moves(board)
     legal = []
     for m in pseudo:
@@ -139,4 +147,101 @@ def generate_legal_moves(board):
         if king_bb and not board.is_square_attacked(lsb(king_bb), board.side):
             legal.append(m)
         board.unmake_move()
+    return legal
+
+
+def _check_and_pin_info(board):
+    """Return (checkers_count, capture_or_block_mask, pinned_bb, pin_ray_full).
+
+    capture_or_block_mask is only meaningful with exactly one checker.
+    pin_ray_full[sq] is the king-to-pinner line, pinner included.
+    """
+    us = board.side
+    them = us ^ 1
+    king_sq = lsb(board.pieces[us][KING])
+    occ = board.all_occupied
+
+    checkers_bb = PAWN_ATTACKS[us][king_sq] & board.pieces[them][PAWN]
+    checkers_bb |= KNIGHT_ATTACKS[king_sq] & board.pieces[them][KNIGHT]
+    checkers_bb |= bishop_attacks(king_sq, occ) & (board.pieces[them][BISHOP] | board.pieces[them][QUEEN])
+    checkers_bb |= rook_attacks(king_sq, occ) & (board.pieces[them][ROOK] | board.pieces[them][QUEEN])
+    checkers_count = popcount(checkers_bb)
+
+    capture_or_block_mask = FULL_BB
+    if checkers_count == 1:
+        checker_sq = lsb(checkers_bb)
+        capture_or_block_mask = 1 << checker_sq
+        sliders = board.pieces[them][BISHOP] | board.pieces[them][ROOK] | board.pieces[them][QUEEN]
+        if (1 << checker_sq) & sliders:
+            capture_or_block_mask |= SQUARES_BETWEEN[king_sq][checker_sq]
+
+    # X-ray from the king through our pieces; a slider with exactly one of ours
+    # in between pins it.
+    own_occ = board.occupied[us]
+    occ_without_own = occ & ~own_occ
+    xray = bishop_attacks(king_sq, occ_without_own) & (board.pieces[them][BISHOP] | board.pieces[them][QUEEN])
+    xray |= rook_attacks(king_sq, occ_without_own) & (board.pieces[them][ROOK] | board.pieces[them][QUEEN])
+
+    pinned_bb = 0
+    pin_ray_full = {}
+    for pinner_sq in iter_bits(xray):
+        between = SQUARES_BETWEEN[king_sq][pinner_sq] & own_occ
+        if popcount(between) == 1:
+            pinned_sq = lsb(between)
+            pinned_bb |= 1 << pinned_sq
+            pin_ray_full[pinned_sq] = SQUARES_BETWEEN[king_sq][pinner_sq] | (1 << pinner_sq)
+
+    return checkers_count, capture_or_block_mask, pinned_bb, pin_ray_full
+
+
+def generate_legal_moves(board):
+    """Filters `generate_pseudo_legal_moves` using check/pin analysis instead
+    of a make/is-attacked/unmake round-trip per move. King moves (needing an
+    "is the destination attacked with the king itself removed from the board"
+    check) and en passant (the classic same-rank discovered-check edge case)
+    still go through a direct, explicit legality check — everything else is
+    resolved algebraically from `_check_and_pin_info`."""
+    us = board.side
+    them = us ^ 1
+    king_sq = lsb(board.pieces[us][KING])
+    checkers_count, capture_or_block_mask, pinned_bb, pin_ray_full = _check_and_pin_info(board)
+
+    pseudo = generate_pseudo_legal_moves(board)
+    if checkers_count >= 2:
+        pseudo = [m for m in pseudo if move_from(m) == king_sq]
+
+    occ_without_king = board.all_occupied & ~(1 << king_sq)
+    legal = []
+    for m in pseudo:
+        flag = move_flag(m)
+        from_sq = move_from(m)
+        to_sq = move_to(m)
+
+        if flag in (FLAG_KING_CASTLE, FLAG_QUEEN_CASTLE):
+            legal.append(m)  # checked at generation
+            continue
+
+        if flag == FLAG_EN_PASSANT:
+            # Removing two pawns from one rank can expose the king without
+            # either being pinned; rare, so just make/unmake.
+            board.make_move(m)
+            ok = not board.is_square_attacked(lsb(board.pieces[us][KING]), them)
+            board.unmake_move()
+            if ok:
+                legal.append(m)
+            continue
+
+        if from_sq == king_sq:
+            if not board.is_square_attacked(to_sq, them, occupied=occ_without_king):
+                legal.append(m)
+            continue
+
+        if checkers_count == 1 and not ((1 << to_sq) & capture_or_block_mask):
+            continue
+
+        if (pinned_bb & (1 << from_sq)) and not ((1 << to_sq) & pin_ray_full[from_sq]):
+            continue
+
+        legal.append(m)
+
     return legal
