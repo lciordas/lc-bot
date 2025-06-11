@@ -6,11 +6,14 @@ authors = [
     { name = "Lucas Ciordas", email = "22lciordas@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "chess>=1.11.2",
+    "numba>=0.61.2",
+    "numpy>=2.2.6",
+]
 
 [dependency-groups]
 dev = [
-    "chess>=1.11.1",
     "pytest>=8.0.0",
 ]
 
