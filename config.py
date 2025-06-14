@@ -6,11 +6,19 @@ from dataclasses import dataclass
 # UCI option name -> (EngineConfig field name, value type: "bool" | "int" | "str")
 _UCI_OPTIONS = {
     "Hash": ("tt_size_mb", "int"),
+    "OwnBook": ("use_opening_book", "bool"),
+    "BookPath": ("book_path", "str"),
+    "UseTablebase": ("use_tablebase", "bool"),
+    "TablebasePath": ("tablebase_path", "str"),
 }
 
 
 @dataclass
 class EngineConfig:
+    use_opening_book: bool = False
+    book_path: str = ""
+    use_tablebase: bool = False
+    tablebase_path: str = ""
     tt_size_mb: int = 64
     # Not read anywhere.
     time_management_mode: str = "fixed"
@@ -20,6 +28,10 @@ class EngineConfig:
         """`option ...` lines advertised in response to the `uci` command."""
         return [
             "option name Hash type spin default 64 min 1 max 4096",
+            "option name OwnBook type check default false",
+            "option name BookPath type string default <empty>",
+            "option name UseTablebase type check default false",
+            "option name TablebasePath type string default <empty>",
         ]
 
     def set_uci_option(self, name: str, value: str) -> bool:
@@ -47,11 +59,15 @@ if __name__ == "__main__":
 
     ok = True
     c = EngineConfig()
+    ok &= check("defaults: book/tablebase off", not c.use_opening_book and not c.use_tablebase)
     ok &= check("defaults: hash 64mb", c.tt_size_mb == 64)
+    ok &= check("set OwnBook true", c.set_uci_option("OwnBook", "true") and c.use_opening_book)
+    ok &= check("set UseTablebase true", c.set_uci_option("UseTablebase", "true") and c.use_tablebase)
     ok &= check("set Hash 128", c.set_uci_option("Hash", "128") and c.tt_size_mb == 128)
+    ok &= check("set BookPath", c.set_uci_option("BookPath", "/tmp/x.bin") and c.book_path == "/tmp/x.bin")
     ok &= check("unknown option rejected", c.set_uci_option("NotReal", "1") is False)
     ok &= check("uci_options mentions every field",
                 all(any(n in line for line in EngineConfig.uci_options())
-                    for n in ("Hash",)))
+                    for n in ("Hash", "OwnBook", "BookPath", "UseTablebase", "TablebasePath")))
     print(f"\n{'ALL PASS' if ok else 'FAILURES PRESENT'}")
     sys.exit(0 if ok else 1)

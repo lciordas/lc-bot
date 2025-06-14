@@ -2,14 +2,16 @@
 
 import sys
 import threading
-import time
 
 from board import Board, STARTING_FEN
+from book import OpeningBook
 from config import EngineConfig
 from constants import WHITE
 from move import move_to_uci
 from movegen import generate_legal_moves
 from search import MATE, MATE_THRESHOLD, Searcher
+from tablebase import Tablebase
+from time_management import compute_budget
 
 ENGINE_NAME = "lc-bot"
 ENGINE_AUTHOR = "Lucas Ciordas"
@@ -44,6 +46,10 @@ class UCIEngine:
         self.board = Board(STARTING_FEN)
         self.searcher = Searcher(config=self.config)
         self._search_thread = None
+        self._book = None
+        self._book_path = None
+        self._tablebase = None
+        self._tablebase_path = None
 
     def _print(self, line: str) -> None:
         self.out.write(line + "\n")
@@ -106,12 +112,13 @@ class UCIEngine:
 
     def cmd_go(self, tokens):
         self._stop_search()
+        self._sync_tablebase()
 
         depth = None
         movetime = None  # seconds
         max_nodes = None
         infinite = False
-        wtime = btime = winc = binc = None
+        wtime = btime = winc = binc = movestogo = None
 
         i = 0
         while i < len(tokens):
@@ -130,16 +137,30 @@ class UCIEngine:
                 winc = int(tokens[i + 1]); i += 2
             elif t == "binc" and i + 1 < len(tokens):
                 binc = int(tokens[i + 1]); i += 2
+            elif t == "movestogo" and i + 1 < len(tokens):
+                movestogo = int(tokens[i + 1]); i += 2
             elif t == "infinite":
                 infinite = True; i += 1
             else:
-                i += 1  # ignore unsupported tokens (ponder, movestogo, mate, searchmoves, ...)
+                i += 1  # ignore unsupported tokens (ponder, mate, searchmoves, ...)
 
+        # `go infinite` must never volunteer a bestmove before `stop` — the
+        # UCI spec requires it, and analysis tools rely on it — so the book
+        # is skipped entirely in that mode, not just deferred.
+        if not infinite:
+            book_move = self._try_book_move()
+            if book_move is not None:
+                self._print(f"bestmove {book_move}")
+                return
+
+        hard_limit = None
         if movetime is None and depth is None and not infinite and (wtime is not None or btime is not None):
             my_time = wtime if self.board.side == WHITE else btime
             my_inc = (winc or 0) if self.board.side == WHITE else (binc or 0)
             if my_time is not None:
-                movetime = max(0.05, my_time / 30000.0 + my_inc / 1000.0 * 0.8)
+                budget = compute_budget(my_time, my_inc, moves_to_go=movestogo)
+                movetime = budget.soft_limit
+                hard_limit = budget.hard_limit
 
         if depth is not None:
             max_depth = depth
@@ -150,7 +171,7 @@ class UCIEngine:
 
         self._search_thread = threading.Thread(
             target=self._run_search,
-            args=(max_depth, None if infinite else movetime, max_nodes),
+            args=(max_depth, None if infinite else movetime, max_nodes, hard_limit),
             daemon=True,
         )
         self._search_thread.start()
@@ -160,15 +181,91 @@ class UCIEngine:
 
     def cmd_quit(self, _args=None):
         self._stop_search()
+        self._close_book()
+        self._close_tablebase()
         sys.exit(0)
+
+    # --- opening book ---
+
+    def _try_book_move(self):
+        """Book move for the current position as a UCI string, or None.
+
+        Load errors are reported via `info string`, and the move is checked
+        against our own move generator before it is returned.
+        """
+        if not self.config.use_opening_book or not self.config.book_path:
+            return None
+        try:
+            book = self._book_for_path(self.config.book_path)
+        except OSError as e:
+            self._print(f"info string opening book unavailable ({self.config.book_path}): {e}")
+            return None
+        try:
+            book_uci = book.best_move_uci(self.board)
+        except Exception as e:
+            self._print(f"info string opening book lookup failed: {e}")
+            return None
+        if book_uci is None:
+            return None
+        if find_move_by_uci(self.board, book_uci) is None:
+            self._print(f"info string opening book returned an illegal move ({book_uci}); ignoring")
+            return None
+        return book_uci
+
+    def _book_for_path(self, path):
+        if self._book is None or self._book_path != path:
+            self._close_book()
+            self._book = OpeningBook(path)
+            self._book_path = path
+        return self._book
+
+    def _close_book(self):
+        if self._book is not None:
+            self._book.close()
+        self._book = None
+        self._book_path = None
+
+    # --- endgame tablebase ---
+
+    def _sync_tablebase(self):
+        """Point the searcher at the configured tablebase, or None. A bad path
+        is reported and treated as disabled."""
+        if not self.config.use_tablebase or not self.config.tablebase_path:
+            self.searcher.tablebase = None
+            return
+        path = self.config.tablebase_path
+        if self._tablebase is None or self._tablebase_path != path:
+            self._close_tablebase()
+            try:
+                self._tablebase = Tablebase(path)
+                self._tablebase_path = path
+            except OSError as e:
+                self._print(f"info string tablebase unavailable ({path}): {e}")
+        self.searcher.tablebase = self._tablebase
+
+    def _close_tablebase(self):
+        if self._tablebase is not None:
+            self._tablebase.close()
+        self._tablebase = None
+        self._tablebase_path = None
 
     # --- search thread plumbing ---
 
-    def _run_search(self, max_depth, movetime, max_nodes):
-        move, _score = self.searcher.search(
-            self.board, max_depth=max_depth, movetime=movetime, max_nodes=max_nodes,
-            on_info=lambda *a: self._print(format_info_line(*a)),
-        )
+    def _run_search(self, max_depth, movetime, max_nodes, hard_limit=None):
+        # Always print a bestmove, even if search() raises, or the GUI hangs.
+        # An exception skips unmake_move calls and leaves the board corrupted,
+        # so restore it from the FEN before picking a fallback move.
+        fen_before = self.board.get_fen()
+        try:
+            move, _score = self.searcher.search(
+                self.board, max_depth=max_depth, movetime=movetime, max_nodes=max_nodes,
+                hard_limit=hard_limit, on_info=lambda *a: self._print(format_info_line(*a)),
+            )
+        except Exception as e:
+            self._print(f"info string search error, falling back to a legal move: {e}")
+            self.board = Board(fen_before)
+            legal = generate_legal_moves(self.board)
+            move = legal[0] if legal else 0
         self._print(f"bestmove {move_to_uci(move) if move else '0000'}")
 
     def wait_for_search(self, timeout=30.0):
@@ -210,6 +307,8 @@ class UCIEngine:
                 self.handle_command(line.strip())
         finally:
             self._stop_search(timeout=2.0)
+            self._close_book()
+            self._close_tablebase()
 
 
 if __name__ == "__main__":

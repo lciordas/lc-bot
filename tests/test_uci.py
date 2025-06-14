@@ -1,6 +1,7 @@
 import io
 import time
 
+import pytest
 from board import Board, STARTING_FEN
 from move import move_to_uci
 from uci import UCIEngine, find_move_by_uci
@@ -39,7 +40,8 @@ def test_uci():
     out = e.out.getvalue()
     assert "id name lc-bot" in out
     assert "id author" in out
-    assert "option name Hash" in out
+    for name in ("Hash", "OwnBook", "BookPath", "UseTablebase", "TablebasePath"):
+        assert f"option name {name}" in out
     assert out.strip().splitlines()[-1] == "uciok"
 
 
@@ -94,6 +96,12 @@ def test_setoption_hash():
     assert e.searcher.config.tt_size_mb == 1
 
 
+def test_setoption_ownbook():
+    e = make_engine()
+    e.cmd_setoption(["name", "OwnBook", "value", "true"])
+    assert e.config.use_opening_book is True
+
+
 def test_setoption_unknown():
     e = make_engine()
     e.cmd_setoption(["name", "NotAThing", "value", "42"])  # must not raise
@@ -145,6 +153,38 @@ def test_go_wtime_btime():
     e.cmd_go(["wtime", "5000", "btime", "5000", "winc", "0", "binc", "0"])
     e.wait_for_search(timeout=15)
     assert "bestmove" in e.out.getvalue()
+
+
+def test_go_uses_own_clock():
+    """White to move: wtime and btime differ, so the resulting budget must
+    reflect wtime specifically (proves the wtime/btime -> my_time selection
+    picks the mover's own clock, not always the same one)."""
+    from time_management import compute_budget
+
+    e = make_engine()
+    e.cmd_go(["wtime", "6000", "btime", "500", "winc", "0", "binc", "0"])
+    e.wait_for_search(timeout=15)
+    expected = compute_budget(6000, 0, moves_to_go=None)
+    assert e.searcher.time_limit == pytest.approx(expected.hard_limit)
+
+
+def test_go_movestogo():
+    from time_management import compute_budget
+
+    e = make_engine()
+    e.cmd_go(["wtime", "1500", "btime", "1500", "winc", "0", "binc", "0", "movestogo", "5"])
+    e.wait_for_search(timeout=15)
+    expected = compute_budget(1500, 0, moves_to_go=5)
+    assert e.searcher.time_limit == pytest.approx(expected.hard_limit)
+
+
+def test_go_depth_no_clock():
+    """An explicit depth limit must bypass wtime/btime budgeting entirely
+    (time_limit should stay None, i.e. no hard cutoff from the clock)."""
+    e = make_engine()
+    e.cmd_go(["depth", "2", "wtime", "60000", "btime", "60000"])
+    e.wait_for_search(timeout=15)
+    assert e.searcher.time_limit is None
 
 
 # --- full command dispatch (handle_command / run-loop plumbing) ---

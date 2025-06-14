@@ -25,11 +25,16 @@ def test_id(engine):
 
 
 def test_options(engine):
-    assert "Hash" in engine.options
+    for name in ("Hash", "OwnBook", "BookPath", "UseTablebase", "TablebasePath"):
+        assert name in engine.options
 
 
 def test_configure_hash(engine):
     engine.configure({"Hash": 128})
+
+
+def test_configure_ownbook(engine):
+    engine.configure({"OwnBook": True})
 
 
 def test_play_startpos(engine):
