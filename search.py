@@ -4,6 +4,7 @@ LMR, futility/razoring, singular extensions, aspiration windows."""
 import sys
 import time
 
+from bitboard import popcount
 from board import Board, STARTING_FEN
 from movegen import generate_legal_moves
 from move import (
@@ -21,18 +22,38 @@ MATE = 100_000            # score for being mated at the current node
 MATE_THRESHOLD = 99_000   # |score| above this is a forced mate
 MAX_PLY = 128
 
+# Nodes between time/node limit checks. Low-time budgets can be ~10ms; at
+# ~50-90K nps, 64 nodes keeps overshoot to about 1ms.
+LIMIT_CHECK_INTERVAL = 64
+
+# Tablebase scoring: a decisive TB result is worth more than any plausible
+# eval score but must stay well clear of MATE_THRESHOLD so it's never
+# mistaken for (or interferes with) a forced-mate score.
+TB_WIN_SCORE = 20_000
+TB_PROBE_MAX_PIECES = 7  # Syzygy tables top out at 7-man; cheap popcount guard
+
 # Transposition-table entry flags.
 TT_EXACT, TT_LOWER, TT_UPPER = 0, 1, 2
 
-# MVV-LVA ordering uses piece values; index by piece type.
-_MVV = (100, 320, 330, 500, 900, 20000)  # king last so K-captures (illegal) never dominate
+# MVV-LVA ordering piece values. Read live from evaluation.PIECE_VALUE rather
+# than a frozen local copy — tuning.py's Texel tuner mutates PIECE_VALUE in
+# place at runtime, and a frozen copy here would silently drift from the
+# tuned eval after a tune() call, degrading move ordering with nothing to
+# catch it. King gets a large sentinel (not PIECE_VALUE's 0) so K-captures
+# (illegal, but harmless if ever scored) never dominate ordering.
+_MVV_KING_SENTINEL = 20_000
+
+
+def _mvv_value(piece_type: int) -> int:
+    return _MVV_KING_SENTINEL if piece_type == KING else PIECE_VALUE[piece_type]
 
 
 class Searcher:
     """Search state; the TT persists across searches."""
 
-    def __init__(self, config=None):
+    def __init__(self, config=None, tablebase=None):
         self.config = config or EngineConfig()
+        self.tablebase = tablebase  # a tablebase.Tablebase, or None (disabled)
         self.tt = {}
         self._tt_max_entries = self._compute_tt_cap(self.config.tt_size_mb)
         self.nodes = 0
@@ -61,15 +82,15 @@ class Searcher:
 
     # --- public entry ---
 
-    def search(self, board, max_depth=64, movetime=None, max_nodes=None, info=False, on_info=None):
+    def search(self, board, max_depth=64, movetime=None, max_nodes=None, info=False, on_info=None, hard_limit=None):
         """Iteratively deepen until a limit is hit. Returns (best_move, score).
 
-        `on_info(depth, score, nodes, elapsed, pv)` is called after every
-        completed iteration if given — the hook `uci.py` uses to emit UCI
-        `info` lines without this module needing to know about UCI at all.
+        `movetime` is the soft limit (no new depth after it); `hard_limit`
+        (default `movetime`) aborts mid-search. `on_info(depth, score, nodes,
+        elapsed, pv)` is called after each completed depth.
         """
         self.start = time.perf_counter()
-        self.time_limit = movetime
+        self.time_limit = hard_limit if hard_limit is not None else movetime
         self.max_nodes = max_nodes
         self.stop = False
         self.nodes = 0
@@ -103,16 +124,17 @@ class Searcher:
                 elapsed = time.perf_counter() - self.start
                 on_info(depth, score, self.nodes, elapsed, self._principal_variation(board))
             if abs(score) >= MATE_THRESHOLD:
-                break  # forced mate — no point searching deeper
-            if movetime is not None and (time.perf_counter() - self.start) >= movetime * 0.5:
-                break  # next depth almost certainly won't finish in budget
+                break  # forced mate
+            if movetime is not None and (time.perf_counter() - self.start) >= movetime:
+                # Soft limit reached; don't start another depth.
+                break
         return best_move, best_score
 
     # --- core ---
 
     def _negamax(self, board, depth, alpha, beta, ply):
         self.nodes += 1
-        if (self.nodes & 2047) == 0:
+        if self.nodes % LIMIT_CHECK_INTERVAL == 0:
             self._check_limits()
         if self.stop:
             return 0
@@ -121,6 +143,17 @@ class Searcher:
 
         if ply > 0 and board.is_draw():
             return 0
+
+        # Tablebase probe, not at the root (we need a move there). -ply/+ply
+        # prefers faster wins and slower losses, as with mate scores.
+        if ply > 0 and self.tablebase is not None and popcount(board.all_occupied) <= TB_PROBE_MAX_PIECES:
+            wdl = self.tablebase.probe_wdl(board)
+            if wdl is not None:
+                if wdl >= 2:
+                    return TB_WIN_SCORE - ply
+                if wdl <= -2:
+                    return -TB_WIN_SCORE + ply
+                return 0  # draw, cursed win, or blessed loss
 
         pv_node = (beta - alpha) > 1
         in_check = board.in_check()
@@ -215,12 +248,23 @@ class Searcher:
         """Search only forcing moves until the position is quiet, so the static
         eval is never applied in the middle of a capture exchange."""
         self.nodes += 1
-        if (self.nodes & 2047) == 0:
+        if self.nodes % LIMIT_CHECK_INTERVAL == 0:
             self._check_limits()
         if self.stop:
             return 0
         if ply >= MAX_PLY:
             return evaluate(board)
+
+        # Probe here too: captures in quiescence are how material usually
+        # drops into tablebase range.
+        if ply > 0 and self.tablebase is not None and popcount(board.all_occupied) <= TB_PROBE_MAX_PIECES:
+            wdl = self.tablebase.probe_wdl(board)
+            if wdl is not None:
+                if wdl >= 2:
+                    return TB_WIN_SCORE - ply
+                if wdl <= -2:
+                    return -TB_WIN_SCORE + ply
+                return 0
 
         if board.in_check():
             # No stand-pat in check; search every evasion.
@@ -280,7 +324,7 @@ class Searcher:
                     else:
                         victim = self._piece_type_on(board, move_to(m), them)
                     attacker = self._piece_type_on(board, move_from(m), us)
-                    s = 10_000_000 + _MVV[victim] * 16 - _MVV[attacker]
+                    s = 10_000_000 + _mvv_value(victim) * 16 - _mvv_value(attacker)
                     if promo:
                         s += 5_000_000
                 elif promo:
