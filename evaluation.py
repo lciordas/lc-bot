@@ -5,8 +5,8 @@ from bitboard import popcount, iter_bits, lsb
 from attacks import KNIGHT_ATTACKS, bishop_attacks, rook_attacks, queen_attacks
 
 
-# --- Material values, indexed by piece type (king = 0; it cancels) ---
-PIECE_VALUE = (100, 320, 330, 500, 900, 0)
+# --- Material, by piece type. A list so tuning.py can mutate it. ---
+PIECE_VALUE = [100, 320, 330, 500, 900, 0]
 
 # --- Tapered-eval phase weights, indexed by piece type ---
 _PHASE_WEIGHT = (0, 1, 1, 2, 4, 0)
