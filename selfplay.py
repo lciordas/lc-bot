@@ -16,13 +16,11 @@ from uci import find_move_by_uci
 
 @dataclass
 class Player:
-    """One side's setup for a game: how it searches, and (optionally) an
-    opening book / tablebase it's allowed to consult. `config.use_opening_book`
-    gates whether `book` is actually consulted -- same on/off contract as the
-    UCI engine, just driven directly instead of through setoption."""
+    """One side's setup. `book` and `tablebase` are used only if the config enables them."""
     config: EngineConfig = field(default_factory=EngineConfig)
     book: object = None
     tablebase: object = None
+    max_depth: int = None
 
 
 @dataclass
@@ -73,7 +71,9 @@ def play_game(white=None, black=None, movetime=0.05, max_plies=200, start_fen=ST
             if book_uci is not None:
                 move = find_move_by_uci(board, book_uci)
         if move is None:
-            move, _score = searchers[board.side].search(board, movetime=movetime)
+            move, _score = searchers[board.side].search(
+                board, max_depth=player.max_depth or 64, movetime=movetime,
+            )
 
         positions.append((fen_before, move_to_uci(move)))
         board.make_move(move)

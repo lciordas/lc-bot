@@ -1,10 +1,55 @@
 import csv
+import time
 
 from board import STARTING_FEN
 from book import OpeningBook
 from config import EngineConfig
+from search import Searcher
 from selfplay import GameRecord, MatchSummary, Player, _summarize, log_match_result, play_game, play_match
 from test_book import write_book
+
+
+def test_max_depth_passed(monkeypatch):
+    captured = []
+    original_search = Searcher.search
+
+    def spy_search(self, board, max_depth=64, **kwargs):
+        captured.append(max_depth)
+        return original_search(self, board, max_depth=1, **kwargs)  # keep it fast
+
+    monkeypatch.setattr(Searcher, "search", spy_search)
+    white = Player(max_depth=2)
+    black = Player(max_depth=7)
+    play_game(white=white, black=black, movetime=0.5, max_plies=2)
+    assert captured == [2, 7]
+
+
+def test_default_max_depth(monkeypatch):
+    captured = []
+    original_search = Searcher.search
+
+    def spy_search(self, board, max_depth=64, **kwargs):
+        captured.append(max_depth)
+        return original_search(self, board, max_depth=1, **kwargs)
+
+    monkeypatch.setattr(Searcher, "search", spy_search)
+    play_game(white=Player(), black=Player(), movetime=0.05, max_plies=1)
+    assert captured == [64]
+
+
+def test_low_depth_faster():
+    shallow = Player(max_depth=1)
+    deep = Player(max_depth=8)
+
+    t0 = time.perf_counter()
+    play_game(white=shallow, black=Player(), movetime=2.0, max_plies=1)
+    shallow_time = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    play_game(white=deep, black=Player(), movetime=2.0, max_plies=1)
+    deep_time = time.perf_counter() - t0
+
+    assert shallow_time < deep_time
 
 
 def test_game_finishes():
