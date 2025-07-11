@@ -194,19 +194,16 @@ def _check_and_pin_info(board):
     return checkers_count, capture_or_block_mask, pinned_bb, pin_ray_full
 
 
-def generate_legal_moves(board):
-    """Filters `generate_pseudo_legal_moves` using check/pin analysis instead
-    of a make/is-attacked/unmake round-trip per move. King moves (needing an
-    "is the destination attacked with the king itself removed from the board"
-    check) and en passant (the classic same-rank discovered-check edge case)
-    still go through a direct, explicit legality check — everything else is
-    resolved algebraically from `_check_and_pin_info`."""
+def _filter_legal(board, pseudo):
+    """Keep the legal moves of `pseudo` using check/pin info.
+
+    King moves and en passant are checked directly against attacks.
+    """
     us = board.side
     them = us ^ 1
     king_sq = lsb(board.pieces[us][KING])
     checkers_count, capture_or_block_mask, pinned_bb, pin_ray_full = _check_and_pin_info(board)
 
-    pseudo = generate_pseudo_legal_moves(board)
     if checkers_count >= 2:
         pseudo = [m for m in pseudo if move_from(m) == king_sq]
 
@@ -245,3 +242,68 @@ def generate_legal_moves(board):
         legal.append(m)
 
     return legal
+
+
+def generate_legal_moves(board):
+    return _filter_legal(board, generate_pseudo_legal_moves(board))
+
+
+def generate_pseudo_legal_captures(board):
+    """Captures, en passant, and all promotions (including quiet ones), for quiescence."""
+    moves = []
+    us = board.side
+    them = us ^ 1
+    their_pieces = board.occupied[them]
+    all_pieces = board.all_occupied
+
+    pawns = board.pieces[us][PAWN]
+    if us == WHITE:
+        single_empty = (pawns << 8) & ~all_pieces & FULL_BB
+        promo_rank = RANKS[7]
+        push = 8
+    else:
+        single_empty = (pawns >> 8) & ~all_pieces & FULL_BB
+        promo_rank = RANKS[0]
+        push = -8
+
+    # Quiet promotions.
+    for to_sq in iter_bits(single_empty & promo_rank):
+        from_sq = to_sq - push
+        for f in _PROMO_QUIET:
+            moves.append(encode_move(from_sq, to_sq, f))
+
+    for from_sq in iter_bits(pawns):
+        attacks = PAWN_ATTACKS[us][from_sq] & their_pieces
+        for to_sq in iter_bits(attacks):
+            if (1 << to_sq) & promo_rank:
+                for f in _PROMO_CAPTURE:
+                    moves.append(encode_move(from_sq, to_sq, f))
+            else:
+                moves.append(encode_move(from_sq, to_sq, FLAG_CAPTURE))
+
+    if board.ep_square >= 0:
+        attackers = PAWN_ATTACKS[them][board.ep_square] & pawns
+        for from_sq in iter_bits(attackers):
+            moves.append(encode_move(from_sq, board.ep_square, FLAG_EN_PASSANT))
+
+    for from_sq in iter_bits(board.pieces[us][KNIGHT]):
+        for to_sq in iter_bits(KNIGHT_ATTACKS[from_sq] & their_pieces):
+            moves.append(encode_move(from_sq, to_sq, FLAG_CAPTURE))
+    for from_sq in iter_bits(board.pieces[us][BISHOP]):
+        for to_sq in iter_bits(bishop_attacks(from_sq, all_pieces) & their_pieces):
+            moves.append(encode_move(from_sq, to_sq, FLAG_CAPTURE))
+    for from_sq in iter_bits(board.pieces[us][ROOK]):
+        for to_sq in iter_bits(rook_attacks(from_sq, all_pieces) & their_pieces):
+            moves.append(encode_move(from_sq, to_sq, FLAG_CAPTURE))
+    for from_sq in iter_bits(board.pieces[us][QUEEN]):
+        for to_sq in iter_bits(queen_attacks(from_sq, all_pieces) & their_pieces):
+            moves.append(encode_move(from_sq, to_sq, FLAG_CAPTURE))
+    for from_sq in iter_bits(board.pieces[us][KING]):
+        for to_sq in iter_bits(KING_ATTACKS[from_sq] & their_pieces):
+            moves.append(encode_move(from_sq, to_sq, FLAG_CAPTURE))
+
+    return moves
+
+
+def generate_legal_captures(board):
+    return _filter_legal(board, generate_pseudo_legal_captures(board))
