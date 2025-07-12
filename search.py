@@ -6,14 +6,15 @@ import time
 
 from bitboard import popcount
 from board import Board, STARTING_FEN
-from movegen import generate_legal_moves
+from movegen import generate_legal_captures, generate_legal_moves
 from move import (
     is_capture, move_flag, move_from, move_to, move_to_uci,
     FLAG_EN_PASSANT, FLAG_PROMO_N, PROMO_FLAG_TO_PIECE,
 )
-from evaluation import evaluate, PIECE_VALUE
-from constants import PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING
+from evaluation import evaluate
+from constants import KNIGHT, BISHOP, ROOK, QUEEN
 from config import EngineConfig
+from see import see
 
 sys.setrecursionlimit(10000)
 
@@ -26,27 +27,33 @@ MAX_PLY = 128
 # ~50-90K nps, 64 nodes keeps overshoot to about 1ms.
 LIMIT_CHECK_INTERVAL = 64
 
-# Tablebase scoring: a decisive TB result is worth more than any plausible
-# eval score but must stay well clear of MATE_THRESHOLD so it's never
-# mistaken for (or interferes with) a forced-mate score.
+# Futility margins by depth (index 0 unused). Standard values, untuned.
+FUTILITY_MARGIN = (0, 200, 350, 550)
+FUTILITY_MAX_DEPTH = 3
+
+RAZOR_MARGIN = 300
+RAZOR_MAX_DEPTH = 2
+
+# Initial aspiration half-width (cp); doubles on each fail.
+ASPIRATION_WINDOW = 50
+
+# Singular extensions: extend the TT move by a ply if no other move gets near
+# its TT score in a reduced-depth null-window search. Requires a deep TT entry
+# so the verification searches stay rare.
+SE_MIN_DEPTH = 6
+SE_TT_DEPTH_MARGIN = 3
+SE_MARGIN_PER_PLY = 2
+SE_EXTENSION = 1
+# An extension cancels the ply decrement, so a line that stays singular would
+# never lose depth. Cap extensions per path.
+SE_MAX_EXTENSIONS = 16
+
+# Above any eval score, well below MATE_THRESHOLD.
 TB_WIN_SCORE = 20_000
 TB_PROBE_MAX_PIECES = 7  # Syzygy tables top out at 7-man; cheap popcount guard
 
 # Transposition-table entry flags.
 TT_EXACT, TT_LOWER, TT_UPPER = 0, 1, 2
-
-# MVV-LVA ordering piece values. Read live from evaluation.PIECE_VALUE rather
-# than a frozen local copy — tuning.py's Texel tuner mutates PIECE_VALUE in
-# place at runtime, and a frozen copy here would silently drift from the
-# tuned eval after a tune() call, degrading move ordering with nothing to
-# catch it. King gets a large sentinel (not PIECE_VALUE's 0) so K-captures
-# (illegal, but harmless if ever scored) never dominate ordering.
-_MVV_KING_SENTINEL = 20_000
-
-
-def _mvv_value(piece_type: int) -> int:
-    return _MVV_KING_SENTINEL if piece_type == KING else PIECE_VALUE[piece_type]
-
 
 class Searcher:
     """Search state; the TT persists across searches."""
@@ -54,8 +61,8 @@ class Searcher:
     def __init__(self, config=None, tablebase=None):
         self.config = config or EngineConfig()
         self.tablebase = tablebase  # a tablebase.Tablebase, or None (disabled)
-        self.tt = {}
         self._tt_max_entries = self._compute_tt_cap(self.config.tt_size_mb)
+        self.tt = [None] * self._tt_max_entries
         self.nodes = 0
         self.stop = False
         self.start = 0.0
@@ -69,16 +76,14 @@ class Searcher:
 
     @staticmethod
     def _compute_tt_cap(tt_size_mb: int) -> int:
-        """Rough entry-count budget for a `tt_size_mb`-sized table (~120 bytes
-        per (depth, flag, score, move) tuple + dict-entry overhead, estimated;
-        exact accuracy isn't the point — bounding unbounded growth is)."""
+        """TT entry count for `tt_size_mb`, assuming ~120 bytes per slot."""
         return max(64, (tt_size_mb * 1024 * 1024) // 120)
 
     def resize_tt(self, tt_size_mb: int) -> None:
-        """Apply a new Hash size (e.g. from a UCI `setoption name Hash`):"""
+        """Reallocate the TT for a new Hash size, discarding its contents."""
         self.config.tt_size_mb = tt_size_mb
         self._tt_max_entries = self._compute_tt_cap(tt_size_mb)
-        self.tt.clear()
+        self.tt = [None] * self._tt_max_entries
 
     # --- public entry ---
 
@@ -104,9 +109,28 @@ class Searcher:
         best_move = legal[0]
         best_score = 0
         for depth in range(1, max_depth + 1):
-            self.best_move_root = 0
-            self.best_score_root = -INF
-            score = self._negamax(board, depth, -INF, INF, 0)
+            # Aspiration window around the last score; full window at depth 1-2.
+            if depth <= 2:
+                alpha, beta = -INF, INF
+            else:
+                window = ASPIRATION_WINDOW
+                alpha = max(-INF, best_score - window)
+                beta = min(INF, best_score + window)
+
+            while True:
+                self.best_move_root = 0
+                self.best_score_root = -INF
+                score = self._negamax(board, depth, alpha, beta, 0)
+                if self.stop:
+                    break
+                if score <= alpha and alpha > -INF:
+                    alpha = max(-INF, alpha - window)
+                    window *= 2
+                elif score >= beta and beta < INF:
+                    beta = min(INF, beta + window)
+                    window *= 2
+                else:
+                    break
 
             if self.stop:
                 # Trust this aborted iteration's root move only if it found one.
@@ -132,7 +156,7 @@ class Searcher:
 
     # --- core ---
 
-    def _negamax(self, board, depth, alpha, beta, ply):
+    def _negamax(self, board, depth, alpha, beta, ply, ext_count=0):
         self.nodes += 1
         if self.nodes % LIMIT_CHECK_INTERVAL == 0:
             self._check_limits()
@@ -166,32 +190,48 @@ class Searcher:
         alpha_orig = alpha
         key = board.zobrist
         tt_move = 0
-        entry = self.tt.get(key)
+        tt_entry_depth = 0
+        tt_entry_flag = None
+        tt_score_adj = 0
+        entry = self._tt_lookup(key)
         if entry is not None:
             e_depth, e_flag, e_score, e_move = entry
             tt_move = e_move
+            tt_entry_depth = e_depth
+            tt_entry_flag = e_flag
+            tt_score_adj = self._tt_read(e_score, ply)
             if ply > 0 and e_depth >= depth:
-                s = self._tt_read(e_score, ply)
                 if e_flag == TT_EXACT:
-                    return s
-                if e_flag == TT_LOWER and s > alpha:
-                    alpha = s
-                elif e_flag == TT_UPPER and s < beta:
-                    beta = s
+                    return tt_score_adj
+                if e_flag == TT_LOWER and tt_score_adj > alpha:
+                    alpha = tt_score_adj
+                elif e_flag == TT_UPPER and tt_score_adj < beta:
+                    beta = tt_score_adj
                 if alpha >= beta:
-                    return s
+                    return tt_score_adj
 
         # Null-move pruning. Skipped with only pawns (zugzwang).
         if (not pv_node and not in_check and depth >= 3 and ply > 0
                 and beta < MATE_THRESHOLD and self._has_non_pawn_material(board)):
             r = 3 if depth >= 6 else 2
             board.make_null_move()
-            score = -self._negamax(board, depth - 1 - r, -beta, -beta + 1, ply + 1)
+            score = -self._negamax(board, depth - 1 - r, -beta, -beta + 1, ply + 1, ext_count)
             board.unmake_null_move()
             if self.stop:
                 return 0
             if score >= beta:
                 return beta
+
+        # Razoring: eval far below alpha at low depth, drop to quiescence.
+        if (not pv_node and not in_check and ply > 0 and 1 <= depth <= RAZOR_MAX_DEPTH
+                and beta < MATE_THRESHOLD):
+            razor_eval = evaluate(board)
+            if razor_eval + RAZOR_MARGIN <= alpha:
+                score = self._quiescence(board, alpha, beta, ply)
+                if self.stop:
+                    return 0
+                if score <= alpha:
+                    return score
 
         moves = generate_legal_moves(board)
         if not moves:
@@ -199,24 +239,50 @@ class Searcher:
 
         moves = self._order_moves(board, moves, tt_move, ply)
 
+        # Singular extensions (see SE_* constants).
+        singular_move = 0
+        if (tt_move != 0 and moves[0] == tt_move and ply > 0 and not in_check
+                and depth >= SE_MIN_DEPTH and ext_count < SE_MAX_EXTENSIONS
+                and tt_entry_depth >= depth - SE_TT_DEPTH_MARGIN and tt_entry_flag != TT_UPPER
+                and abs(tt_score_adj) < MATE_THRESHOLD):
+            singular_beta = tt_score_adj - SE_MARGIN_PER_PLY * depth
+            singular_depth = (depth - 1) // 2
+            if self._is_tt_move_singular(board, moves, tt_move, singular_beta, singular_depth, ply):
+                singular_move = tt_move
+
+        # Futility eval is computed lazily, once per node.
+        futility_eval = None
+        futility_active = not pv_node and not in_check and 1 <= depth <= FUTILITY_MAX_DEPTH
+
         best_score = -INF
         best_move = moves[0]
         for i, m in enumerate(moves):
             is_quiet = not (is_capture(m) or move_flag(m) >= FLAG_PROMO_N)
+            consider_futility = futility_active and is_quiet and i > 0
+            if consider_futility and futility_eval is None:
+                futility_eval = evaluate(board)
+
+            # Make the move first: checking moves are never futility-pruned.
             board.make_move(m)
             gives_check = board.in_check()
 
+            if (consider_futility and not gives_check
+                    and futility_eval + FUTILITY_MARGIN[depth] <= alpha):
+                board.unmake_move()
+                continue
+
             if i == 0:
-                score = -self._negamax(board, depth - 1, -beta, -alpha, ply + 1)
+                ext = SE_EXTENSION if singular_move else 0
+                score = -self._negamax(board, depth - 1 + ext, -beta, -alpha, ply + 1, ext_count + ext)
             else:
                 # Late-move reduction for quiet, late, non-forcing moves.
                 reduction = 0
                 if depth >= 3 and i >= 3 and is_quiet and not in_check and not gives_check:
                     reduction = 1 if i < 6 else 2
-                score = -self._negamax(board, depth - 1 - reduction, -alpha - 1, -alpha, ply + 1)
+                score = -self._negamax(board, depth - 1 - reduction, -alpha - 1, -alpha, ply + 1, ext_count)
                 # Re-search at full depth/window if it surprises us.
                 if score > alpha and (reduction > 0 or score < beta):
-                    score = -self._negamax(board, depth - 1, -beta, -alpha, ply + 1)
+                    score = -self._negamax(board, depth - 1, -beta, -alpha, ply + 1, ext_count)
 
             board.unmake_move()
             if self.stop:
@@ -283,15 +349,22 @@ class Searcher:
                     alpha = score
             return alpha
 
+        captures = generate_legal_captures(board)
+        if not captures and not generate_legal_moves(board):
+            # Stalemate. Reachable via razoring, which enters quiescence
+            # without checking for legal moves.
+            return 0
+
         stand = evaluate(board)
         if stand >= beta:
             return beta
         if stand > alpha:
             alpha = stand
 
-        moves = generate_legal_moves(board)
-        captures = [m for m in moves if is_capture(m) or move_flag(m) >= FLAG_PROMO_N]
         for m in self._order_moves(board, captures, 0, ply):
+            # Losing captures are sorted last, so stop at the first one.
+            if is_capture(m) and see(board, m) < 0:
+                break
             board.make_move(m)
             score = -self._quiescence(board, -beta, -alpha, ply + 1)
             board.unmake_move()
@@ -306,8 +379,6 @@ class Searcher:
     # --- move ordering ---
 
     def _order_moves(self, board, moves, tt_move, ply):
-        us = board.side
-        them = us ^ 1
         k0 = self.killers[ply][0] if ply < MAX_PLY else 0
         k1 = self.killers[ply][1] if ply < MAX_PLY else 0
         hist = self.history
@@ -319,14 +390,9 @@ class Searcher:
                 flag = move_flag(m)
                 promo = flag >= FLAG_PROMO_N
                 if is_capture(m):
-                    if flag == FLAG_EN_PASSANT:
-                        victim = PAWN
-                    else:
-                        victim = self._piece_type_on(board, move_to(m), them)
-                    attacker = self._piece_type_on(board, move_from(m), us)
-                    s = 10_000_000 + _mvv_value(victim) * 16 - _mvv_value(attacker)
-                    if promo:
-                        s += 5_000_000
+                    # Order by SEE; losing captures go below quiet moves.
+                    exchange = see(board, m)
+                    s = (20_000_000 + exchange) if exchange >= 0 else exchange
                 elif promo:
                     s = 9_000_000 + PROMO_FLAG_TO_PIECE[flag]
                 elif m == k0:
@@ -339,14 +405,19 @@ class Searcher:
         scored.sort(key=lambda sm: sm[0], reverse=True)
         return [m for _, m in scored]
 
-    @staticmethod
-    def _piece_type_on(board, sq, color):
-        bb = 1 << sq
-        pieces = board.pieces[color]
-        for pt in range(6):
-            if pieces[pt] & bb:
-                return pt
-        return PAWN  # unreachable for a real capture; keeps MVV indexing safe
+    def _is_tt_move_singular(self, board, moves, tt_move, singular_beta, singular_depth, ply):
+        """True if no move other than `tt_move` (== moves[0]) reaches
+        `singular_beta` in a reduced-depth null-window search."""
+        assert moves[0] == tt_move
+        for m in moves[1:]:
+            board.make_move(m)
+            score = -self._negamax(board, singular_depth, -singular_beta, -singular_beta + 1, ply + 1)
+            board.unmake_move()
+            if self.stop:
+                return False
+            if score >= singular_beta:
+                return False
+        return True
 
     def _store_killer(self, ply, move):
         if move != self.killers[ply][0]:
@@ -359,17 +430,30 @@ class Searcher:
         return bool(p[KNIGHT] or p[BISHOP] or p[ROOK] or p[QUEEN])
 
     # --- transposition table (mate scores are stored relative to the node) ---
+    #
+    # Direct-mapped, slot = key % size; slots store the full key to detect
+    # collisions. Depth-preferred replacement, even for the same key, so a
+    # shallow SE verification search can't evict a deeper entry.
+
+    def _tt_index(self, key: int) -> int:
+        return key % self._tt_max_entries
+
+    def _tt_lookup(self, key):
+        """(depth, flag, score, move) for `key`, or None."""
+        entry = self.tt[self._tt_index(key)]
+        if entry is not None and entry[0] == key:
+            return entry[1], entry[2], entry[3], entry[4]
+        return None
 
     def _tt_store(self, key, depth, score, flag, move, ply):
         if score >= MATE_THRESHOLD:
             score += ply
         elif score <= -MATE_THRESHOLD:
             score -= ply
-        prev = self.tt.get(key)
-        if prev is None or depth >= prev[0]:  # depth-preferred replacement
-            if key not in self.tt and len(self.tt) >= self._tt_max_entries:
-                self.tt.clear()
-            self.tt[key] = (depth, flag, score, move)
+        idx = self._tt_index(key)
+        existing = self.tt[idx]
+        if existing is None or depth >= existing[1]:
+            self.tt[idx] = (key, depth, flag, score, move)
 
     @staticmethod
     def _tt_read(score, ply):
@@ -396,7 +480,7 @@ class Searcher:
             if key in seen:
                 break
             seen.add(key)
-            entry = self.tt.get(key)
+            entry = self._tt_lookup(key)
             if entry is None or entry[3] == 0:
                 break
             m = entry[3]
