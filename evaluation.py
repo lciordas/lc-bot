@@ -1,4 +1,9 @@
-"""Static evaluation: material + phase-interpolated piece-square tables."""
+"""Handcrafted evaluation: material, tapered PSTs, pawn structure, mobility,
+king safety, center control, king tropism, and endgame mop-up.
+
+Every term is antisymmetric under a colour flip. Tables are written in reading
+order (index 0 = a8); white reads table[sq ^ 56], black reads table[sq].
+"""
 
 from constants import WHITE, BLACK, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, FILES
 from bitboard import popcount, iter_bits, lsb
@@ -130,6 +135,9 @@ _PST_READING = {
     ),
 }
 
+# Mutable copies for tuning.py.
+_PST_READING = {pt: (list(mg), list(eg)) for pt, (mg, eg) in _PST_READING.items()}
+
 
 def _build_pst():
     """Build (MG, EG), each [color][piece] -> 64-tuple indexed by LERF square."""
@@ -142,6 +150,14 @@ def _build_pst():
         mg[BLACK][pt] = tuple(mg_tbl)
         eg[BLACK][pt] = tuple(eg_tbl)
     return mg, eg
+
+
+def _update_pst_pt_phase(pt: int, phase_idx: int) -> None:
+    """Rebuild MG (phase_idx 0) or EG (1) for one piece type; used by the tuner."""
+    tbl = _PST_READING[pt][phase_idx]
+    target = MG if phase_idx == 0 else EG
+    target[WHITE][pt] = tuple(tbl[sq ^ 56] for sq in range(64))
+    target[BLACK][pt] = tuple(tbl)
 
 
 MG, EG = _build_pst()
@@ -231,6 +247,17 @@ CMD = (
 CHEB_BONUS = (0, 0, 50, 30, 20, 15, 10, 5)  # by king-to-king Chebyshev distance
 
 
+# --- Center-control table ---
+CENTER_SQUARES = (1 << 27) | (1 << 28) | (1 << 35) | (1 << 36)  # d4, e4, d5, e5
+CENTER_OCCUPY_BONUS = 10  # per non-king piece on a center square
+CENTER_ATTACK_BONUS = 4   # per N/B/R/Q attack on a center square
+
+
+# --- King-tropism table ---
+# Per-piece-type weight for proximity to the enemy king; pawns and king excluded.
+TROPISM_WEIGHT = (0, 4, 3, 2, 5, 0)
+
+
 # --- Components (all from White's perspective) ---
 
 def game_phase(board) -> int:
@@ -304,23 +331,39 @@ def _pawn_structure_white(board) -> int:
     return score
 
 
-def _mobility_white(board) -> int:
+def _piece_activity_white(board):
+    """(mobility_score, center_attack_score) from one pass over the attack sets."""
     occ = board.all_occupied
-    score = 0
+    mobility = 0
+    center_attacks = 0
     for color, sign in ((WHITE, 1), (BLACK, -1)):
         own = board.occupied[color]
         p = board.pieces[color]
         m = 0
+        c = 0
         for sq in iter_bits(p[KNIGHT]):
-            m += popcount(KNIGHT_ATTACKS[sq] & ~own)
+            atk = KNIGHT_ATTACKS[sq]
+            m += popcount(atk & ~own)
+            c += popcount(atk & CENTER_SQUARES)
         for sq in iter_bits(p[BISHOP]):
-            m += popcount(bishop_attacks(sq, occ) & ~own)
+            atk = bishop_attacks(sq, occ)
+            m += popcount(atk & ~own)
+            c += popcount(atk & CENTER_SQUARES)
         for sq in iter_bits(p[ROOK]):
-            m += popcount(rook_attacks(sq, occ) & ~own)
+            atk = rook_attacks(sq, occ)
+            m += popcount(atk & ~own)
+            c += popcount(atk & CENTER_SQUARES)
         for sq in iter_bits(p[QUEEN]):
-            m += popcount(queen_attacks(sq, occ) & ~own)
-        score += sign * m
-    return score * MOBILITY_WEIGHT
+            atk = queen_attacks(sq, occ)
+            m += popcount(atk & ~own)
+            c += popcount(atk & CENTER_SQUARES)
+        mobility += sign * m
+        center_attacks += sign * c
+    return mobility * MOBILITY_WEIGHT, center_attacks * CENTER_ATTACK_BONUS
+
+
+def _mobility_white(board) -> int:
+    return _piece_activity_white(board)[0]
 
 
 def _king_safety_white(board, phase: int) -> int:
@@ -334,12 +377,40 @@ def _king_safety_white(board, phase: int) -> int:
     return round(total * phase / PHASE_MAX)
 
 
+def _center_occupation_white(board) -> int:
+    score = 0
+    for color, sign in ((WHITE, 1), (BLACK, -1)):
+        p = board.pieces[color]
+        non_king = board.occupied[color] & ~p[KING]
+        score += sign * CENTER_OCCUPY_BONUS * popcount(non_king & CENTER_SQUARES)
+    return score
+
+
+def _center_control_white(board) -> int:
+    return _center_occupation_white(board) + _piece_activity_white(board)[1]
+
+
 def _manhattan(a: int, b: int) -> int:
     return abs((a & 7) - (b & 7)) + abs((a >> 3) - (b >> 3))
 
 
 def _chebyshev(a: int, b: int) -> int:
     return max(abs((a & 7) - (b & 7)), abs((a >> 3) - (b >> 3)))
+
+
+def _king_tropism_white(board, phase: int) -> int:
+    """Pieces near the enemy king, scaled by phase like king safety."""
+    if phase == 0:
+        return 0
+    total = 0
+    for color, sign in ((WHITE, 1), (BLACK, -1)):
+        enemy_ksq = lsb(board.pieces[color ^ 1][KING])
+        p = board.pieces[color]
+        for pt in (KNIGHT, BISHOP, ROOK, QUEEN):
+            weight = TROPISM_WEIGHT[pt]
+            for sq in iter_bits(p[pt]):
+                total += sign * weight * (7 - _chebyshev(sq, enemy_ksq))
+    return round(total * phase / PHASE_MAX)
 
 
 def _mopup_white(board) -> int:
@@ -371,8 +442,11 @@ def evaluate_white(board) -> int:
     score = _material_white(board)
     score += _pst_white(board, phase)
     score += _pawn_structure_white(board)
-    score += _mobility_white(board)
+    mobility_score, center_attack_score = _piece_activity_white(board)
+    score += mobility_score
     score += _king_safety_white(board, phase)
+    score += _center_occupation_white(board) + center_attack_score
+    score += _king_tropism_white(board, phase)
     score += _mopup_white(board)
     return score
 
@@ -477,6 +551,25 @@ def _run_self_test() -> bool:
     check("mop-up: drives losing king to edge", _mopup_white(edge) > _mopup_white(centre_k))
     check("mop-up: active (non-zero) when winning", _mopup_white(edge) > 0)
     check("mop-up: off when material is level", _mopup_white(Board("4k3/8/8/8/8/8/8/4K3 w - - 0 1")) == 0)
+
+    # 11. Center control: central knight beats a corner knight.
+    center_knight = Board("4k3/8/8/8/3N4/8/8/4K3 w - - 0 1")
+    corner_knight = Board("4k3/8/8/8/8/8/8/N3K3 w - - 0 1")
+    check("center control: knight d4 > knight a1",
+          _center_control_white(center_knight) > _center_control_white(corner_knight))
+
+    # 11b. A second attacker on an already-attacked square still counts.
+    one_attacker = Board("4k3/8/8/8/8/1N6/8/4K3 w - - 0 1")       # Nb3 attacks d4
+    two_attackers = Board("4k3/8/8/8/8/1N6/2N5/4K3 w - - 0 1")    # Nb3 + Nc2, both attack d4
+    check("center control: a second attacker on the same square adds credit",
+          _center_control_white(two_attackers) > _center_control_white(one_attacker))
+
+    # 12. King tropism: queen near the enemy king beats a distant one.
+    close_queen = Board("4k3/3Q4/8/8/8/8/8/4K3 w - - 0 1")
+    far_queen = Board("4k3/8/8/8/8/8/8/3QK3 w - - 0 1")
+    check("king tropism: queen near enemy king > queen far away",
+          _king_tropism_white(close_queen, game_phase(close_queen))
+          > _king_tropism_white(far_queen, game_phase(far_queen)))
 
     print(f"\n{'ALL PASS' if ok else 'FAILURES PRESENT'}")
     return ok

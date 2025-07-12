@@ -1,9 +1,8 @@
-"""Texel tuning: fit evaluation.py's tunable constants to actual self-play
-game outcomes via local hill-climbing (coordinate descent) -- the approach
-the "Texel" chess engine popularized. No external optimization dependency
-(no scipy): each parameter is nudged +/-step and the change is kept only if
-it reduces mean-squared error against a sigmoid-mapped win prediction, one
-parameter at a time, repeated in rounds until nothing improves.
+"""Texel tuning: coordinate descent on evaluation.py's constants against game results.
+
+Setters mutate evaluation.py's module globals in place; tests must snapshot and
+restore them. PST cells are tuned through evaluation._PST_READING so both
+colours' tables stay mirrored.
 """
 
 from dataclasses import dataclass
@@ -12,7 +11,9 @@ from typing import Callable
 import evaluation
 from board import Board
 
-_MATERIAL_NAMES = ("pawn", "knight", "bishop", "rook", "queen")  # king excluded: always 0
+_PIECE_NAMES = ("pawn", "knight", "bishop", "rook", "queen", "king")
+_MATERIAL_NAMES = _PIECE_NAMES[:5]  # king excluded: always 0
+_PHASE_NAMES = ("mg", "eg")
 
 
 @dataclass
@@ -24,7 +25,7 @@ class Param:
 
 
 def default_params() -> list:
-    """The tunable evaluation.py constants for this first tuning pass."""
+    """Material, mobility/shield/doubled-pawn scalars, and all 768 PST cells."""
     params = [
         Param(
             f"material_{name}",
@@ -49,6 +50,28 @@ def default_params() -> list:
         lambda: evaluation.DOUBLED_PEN,
         lambda v: setattr(evaluation, "DOUBLED_PEN", v),
     ))
+    params.extend(pst_params())
+    return params
+
+
+def _set_pst_cell(pt: int, phase_idx: int, idx: int, v: int) -> None:
+    """Set one reading-order cell and rebuild only that piece type/phase's MG/EG tables."""
+    evaluation._PST_READING[pt][phase_idx][idx] = v
+    evaluation._update_pst_pt_phase(pt, phase_idx)
+
+
+def pst_params(step: int = 5) -> list:
+    """One Param per PST cell: 6 piece types x (mg, eg) x 64 squares."""
+    params = []
+    for pt, piece_name in enumerate(_PIECE_NAMES):
+        for phase_idx, phase_name in enumerate(_PHASE_NAMES):
+            for idx in range(64):
+                params.append(Param(
+                    f"pst_{piece_name}_{phase_name}_{idx}",
+                    (lambda pt=pt, phase_idx=phase_idx, idx=idx: evaluation._PST_READING[pt][phase_idx][idx]),
+                    (lambda v, pt=pt, phase_idx=phase_idx, idx=idx: _set_pst_cell(pt, phase_idx, idx, v)),
+                    step=step,
+                ))
     return params
 
 
