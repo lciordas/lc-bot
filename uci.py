@@ -1,4 +1,8 @@
-"""UCI (Universal Chess Interface) protocol loop."""
+"""UCI protocol loop over stdin/stdout.
+
+Search runs on a background thread; `stop` sets `Searcher.stop`, a plain bool
+the search polls (no lock needed under the GIL).
+"""
 
 import sys
 import threading
@@ -50,6 +54,8 @@ class UCIEngine:
         self._book_path = None
         self._tablebase = None
         self._tablebase_path = None
+        self._pondering = False
+        self._ponder_budget = None
 
     def _print(self, line: str) -> None:
         self.out.write(line + "\n")
@@ -71,6 +77,8 @@ class UCIEngine:
         self._stop_search()
         self.board = Board(STARTING_FEN)
         self.searcher = Searcher(config=self.config)
+        self._pondering = False
+        self._ponder_budget = None
 
     def cmd_setoption(self, tokens):
         # setoption name <name...> value <value...>
@@ -118,6 +126,7 @@ class UCIEngine:
         movetime = None  # seconds
         max_nodes = None
         infinite = False
+        ponder = False
         wtime = btime = winc = binc = movestogo = None
 
         i = 0
@@ -141,18 +150,20 @@ class UCIEngine:
                 movestogo = int(tokens[i + 1]); i += 2
             elif t == "infinite":
                 infinite = True; i += 1
+            elif t == "ponder":
+                ponder = True; i += 1
             else:
-                i += 1  # ignore unsupported tokens (ponder, mate, searchmoves, ...)
+                i += 1  # ignore unsupported tokens (mate, searchmoves, ...)
 
-        # `go infinite` must never volunteer a bestmove before `stop` — the
-        # UCI spec requires it, and analysis tools rely on it — so the book
-        # is skipped entirely in that mode, not just deferred.
-        if not infinite:
+        # infinite/ponder must not send bestmove before stop/ponderhit, so
+        # skip the book in both modes.
+        if not infinite and not ponder:
             book_move = self._try_book_move()
             if book_move is not None:
                 self._print(f"bestmove {book_move}")
                 return
 
+        # Also computed for ponder searches, which stash it for ponderhit.
         hard_limit = None
         if movetime is None and depth is None and not infinite and (wtime is not None or btime is not None):
             my_time = wtime if self.board.side == WHITE else btime
@@ -162,19 +173,40 @@ class UCIEngine:
                 movetime = budget.soft_limit
                 hard_limit = budget.hard_limit
 
-        if depth is not None:
+        if infinite or ponder:
+            # Ignore any depth limit: finishing early would send bestmove
+            # before stop/ponderhit.
+            max_depth = 64
+        elif depth is not None:
             max_depth = depth
-        elif infinite or movetime is not None or max_nodes is not None:
+        elif movetime is not None or max_nodes is not None:
             max_depth = 64
         else:
             max_depth = 6  # bare "go" with no limits at all
 
+        self._pondering = ponder
+        self._ponder_budget = (movetime, hard_limit) if ponder else None
+        actual_movetime = None if (infinite or ponder) else movetime
+        actual_hard_limit = None if ponder else hard_limit
+
         self._search_thread = threading.Thread(
             target=self._run_search,
-            args=(max_depth, None if infinite else movetime, max_nodes, hard_limit),
+            args=(max_depth, actual_movetime, max_nodes, actual_hard_limit),
             daemon=True,
         )
         self._search_thread.start()
+
+    def cmd_ponderhit(self, _args=None):
+        """Apply the stashed time budget to the running ponder search.
+
+        The budget's clock starts now, so the opponent's think time isn't
+        charged to us.
+        """
+        if not self._pondering:
+            return
+        self._pondering = False
+        movetime, hard_limit = self._ponder_budget or (None, None)
+        self.searcher.apply_time_budget(movetime, hard_limit)
 
     def cmd_stop(self, _args=None):
         self._stop_search()
@@ -256,17 +288,34 @@ class UCIEngine:
         # An exception skips unmake_move calls and leaves the board corrupted,
         # so restore it from the FEN before picking a fallback move.
         fen_before = self.board.get_fen()
+        # cmd_position can reassign self.board while we search, so keep our own reference.
+        board_for_search = self.board
+        # PV of the last completed iteration, reused for the ponder move.
+        last_pv = []
+
+        def on_info(depth, score, nodes, elapsed, pv_moves):
+            last_pv[:] = pv_moves
+            self._print(format_info_line(depth, score, nodes, elapsed, pv_moves))
+
         try:
             move, _score = self.searcher.search(
-                self.board, max_depth=max_depth, movetime=movetime, max_nodes=max_nodes,
-                hard_limit=hard_limit, on_info=lambda *a: self._print(format_info_line(*a)),
+                board_for_search, max_depth=max_depth, movetime=movetime, max_nodes=max_nodes,
+                hard_limit=hard_limit, on_info=on_info,
             )
         except Exception as e:
             self._print(f"info string search error, falling back to a legal move: {e}")
             self.board = Board(fen_before)
             legal = generate_legal_moves(self.board)
             move = legal[0] if legal else 0
-        self._print(f"bestmove {move_to_uci(move) if move else '0000'}")
+            last_pv = []
+        self._pondering = False
+        line = f"bestmove {move_to_uci(move) if move else '0000'}"
+        if move and len(last_pv) >= 2:
+            # Predicted opponent reply: the second PV move is what a GUI
+            # would pre-search on its next `go ponder` -- standard UCI
+            # ponder-move sourcing.
+            line += f" ponder {move_to_uci(last_pv[1])}"
+        self._print(line)
 
     def wait_for_search(self, timeout=30.0):
         """Block until the current search finishes, without stopping it."""
@@ -288,6 +337,7 @@ class UCIEngine:
         "position": "cmd_position",
         "go": "cmd_go",
         "stop": "cmd_stop",
+        "ponderhit": "cmd_ponderhit",
         "setoption": "cmd_setoption",
         "quit": "cmd_quit",
     }

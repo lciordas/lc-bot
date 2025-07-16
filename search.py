@@ -74,6 +74,12 @@ class Searcher:
         self.killers = [[0, 0] for _ in range(MAX_PLY)]
         self.history = [[0] * 64 for _ in range(64)]
 
+    def apply_time_budget(self, movetime, hard_limit) -> None:
+        """Set the mid-search time cutoff and restart the clock. Also used on
+        ponderhit to apply a budget to a running search."""
+        self.start = time.perf_counter()
+        self.time_limit = hard_limit if hard_limit is not None else movetime
+
     @staticmethod
     def _compute_tt_cap(tt_size_mb: int) -> int:
         """TT entry count for `tt_size_mb`, assuming ~120 bytes per slot."""
@@ -94,8 +100,7 @@ class Searcher:
         (default `movetime`) aborts mid-search. `on_info(depth, score, nodes,
         elapsed, pv)` is called after each completed depth.
         """
-        self.start = time.perf_counter()
-        self.time_limit = hard_limit if hard_limit is not None else movetime
+        self.apply_time_budget(movetime, hard_limit)
         self.max_nodes = max_nodes
         self.stop = False
         self.nodes = 0
