@@ -47,4 +47,32 @@ def test_hard_limit_bounds():
     t0 = time.perf_counter()
     s.search(b, max_depth=64, movetime=soft, hard_limit=hard)
     elapsed = time.perf_counter() - t0
-    assert elapsed <= hard + 0.1  # small allowance for one in-progress depth finishing
+    assert elapsed <= hard + 0.1  # allowance for the depth in progress
+
+
+# --- apply_time_budget ---
+
+def test_budget_resets_clock():
+    s = Searcher()
+    s.start = 0.0  # stale
+    before = time.perf_counter()
+    s.apply_time_budget(movetime=1.0, hard_limit=None)
+    assert s.start >= before
+
+
+def test_budget_hard_over_movetime():
+    s = Searcher()
+    s.apply_time_budget(movetime=5.0, hard_limit=1.5)
+    assert s.time_limit == 1.5
+
+
+def test_budget_movetime_fallback():
+    s = Searcher()
+    s.apply_time_budget(movetime=2.0, hard_limit=None)
+    assert s.time_limit == 2.0
+
+
+def test_budget_unbounded():
+    s = Searcher()
+    s.apply_time_budget(movetime=None, hard_limit=None)
+    assert s.time_limit is None

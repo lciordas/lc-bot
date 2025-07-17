@@ -96,6 +96,18 @@ def test_infinite_no_book(tmp_path):
     assert "bestmove" in e.out.getvalue()  # only after stop
 
 
+def test_ponder_no_book(tmp_path):
+    """`go ponder` must not send bestmove before `ponderhit`/`stop`, even on a book hit."""
+    path = write_book(tmp_path, [(None, "e2e4", 10)])
+    e = make_engine()
+    e.cmd_setoption(["name", "BookPath", "value", str(path)])
+    e.cmd_setoption(["name", "OwnBook", "value", "true"])
+    e.cmd_go(["ponder", "wtime", "60000", "btime", "60000"])
+    assert "bestmove" not in e.out.getvalue()
+    e.cmd_stop()
+    assert "bestmove" in e.out.getvalue()  # only after stop
+
+
 class _IllegalMoveBook:
     """Book returning an illegal move (e.g. a hash mismatch); a real .bin can't produce one."""
 
