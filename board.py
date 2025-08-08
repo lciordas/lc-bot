@@ -56,6 +56,8 @@ class Board:
         "pieces", "occupied", "all_occupied", "side", "castling",
         "ep_square", "halfmove", "fullmove", "history",
         "zobrist", "_null_history",
+        # NNUE accumulator, or None when using the handcrafted eval.
+        "nnue",
     )
 
     def __init__(self, fen: str = STARTING_FEN):
@@ -64,6 +66,7 @@ class Board:
     # --- FEN ---
 
     def set_fen(self, fen: str) -> None:
+        self.nnue = None
         self.pieces = [[0] * 6, [0] * 6]
         self.occupied = [0, 0]
         parts = fen.split()
@@ -276,7 +279,39 @@ class Board:
         self.all_occupied = self.occupied[WHITE] | self.occupied[BLACK]
         self.side = them
 
+        if self.nnue is not None:
+            self._nnue_apply(flag, us, them, from_sq, to_sq,
+                             moving_piece, captured_piece, captured_sq)
+
+    def _nnue_apply(self, flag, us, them, from_sq, to_sq,
+                    moving_piece, captured_piece, captured_sq):
+        """Apply the move to the NNUE accumulator; mirrors the PIECE_KEYS XORs in make_move.
+
+        Kept out of line so the non-NNUE path pays only one `is not None` test.
+        """
+        acc = self.nnue
+        acc.push()
+        acc.remove(us, moving_piece, from_sq)
+        if captured_piece >= 0:
+            acc.remove(them, captured_piece, captured_sq)
+        if flag >= FLAG_PROMO_N:
+            acc.add(us, PROMO_FLAG_TO_PIECE[flag], to_sq)
+        else:
+            acc.add(us, moving_piece, to_sq)
+        if flag == FLAG_KING_CASTLE:
+            if us == WHITE:
+                acc.remove(us, ROOK, H1); acc.add(us, ROOK, 5)
+            else:
+                acc.remove(us, ROOK, H8); acc.add(us, ROOK, 61)
+        elif flag == FLAG_QUEEN_CASTLE:
+            if us == WHITE:
+                acc.remove(us, ROOK, A1); acc.add(us, ROOK, 3)
+            else:
+                acc.remove(us, ROOK, A8); acc.add(us, ROOK, 59)
+
     def unmake_move(self) -> None:
+        if self.nnue is not None:
+            self.nnue.pop()
         move, captured_piece, captured_sq, castling, ep_square, halfmove, zob = self.history.pop()
         from_sq = move_from(move)
         to_sq = move_to(move)
