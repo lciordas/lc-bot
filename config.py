@@ -10,6 +10,9 @@ _UCI_OPTIONS = {
     "BookPath": ("book_path", "str"),
     "UseTablebase": ("use_tablebase", "bool"),
     "TablebasePath": ("tablebase_path", "str"),
+    "UseNNUE": ("use_nnue", "bool"),
+    "NNUEPath": ("nnue_path", "str"),
+    "NNUEMode": ("nnue_mode", "str"),
 }
 
 
@@ -19,6 +22,10 @@ class EngineConfig:
     book_path: str = ""
     use_tablebase: bool = False
     tablebase_path: str = ""
+    # NNUE is off by default; the hand-written eval is the fallback.
+    use_nnue: bool = False
+    nnue_path: str = ""
+    nnue_mode: str = "hybrid"     # "hybrid" (base eval + residual) or "pure"
     tt_size_mb: int = 64
     # Not read anywhere.
     time_management_mode: str = "fixed"
@@ -32,6 +39,9 @@ class EngineConfig:
             "option name BookPath type string default <empty>",
             "option name UseTablebase type check default false",
             "option name TablebasePath type string default <empty>",
+            "option name UseNNUE type check default false",
+            "option name NNUEPath type string default <empty>",
+            "option name NNUEMode type combo default hybrid var hybrid var pure",
         ]
 
     def set_uci_option(self, name: str, value: str) -> bool:
