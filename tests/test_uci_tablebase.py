@@ -1,6 +1,6 @@
 import io
 
-from uci import UCIEngine
+from lcbot.uci import UCIEngine
 
 
 def make_engine():
@@ -30,7 +30,7 @@ def test_empty_tablebase_dir(tmp_path):
 
 def test_bad_tablebase_path():
     e = make_engine()
-    e.cmd_setoption(["name", "TablebasePath", "value", "/tmp/not-a-real-tb-dir-final-engine"])
+    e.cmd_setoption(["name", "TablebasePath", "value", "/tmp/not-a-real-tb-dir-lc-bot"])
     e.cmd_setoption(["name", "UseTablebase", "value", "true"])
     e.cmd_go(["depth", "2"])
     e.wait_for_search(timeout=15)

@@ -2,13 +2,11 @@
 
 import time
 
-from board import STARTING_FEN, Board
-from move import move_to_uci
-from movegen import generate_legal_moves
-from search import MATE_THRESHOLD, SE_MIN_DEPTH, Searcher, find_best_move
-import search
-
-
+from lcbot.board import STARTING_FEN, Board
+from lcbot.move import move_to_uci
+from lcbot.movegen import generate_legal_moves
+from lcbot.search import MATE_THRESHOLD, SE_MIN_DEPTH, Searcher, find_best_move
+from lcbot import search
 def _ready(s):
     s.start = time.perf_counter()
 

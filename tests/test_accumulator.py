@@ -1,18 +1,14 @@
 """Incremental NNUE accumulator must match a from-scratch rebuild after every make/unmake."""
 
 import random
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
 
-from accumulator import FloatAccumulator
-from board import Board
-from movegen import generate_legal_moves
-from nnue_net import random_net
-from move import move_from, move_to, move_flag
+from lcbot.accumulator import FloatAccumulator
+from lcbot.board import Board
+from lcbot.movegen import generate_legal_moves
+from lcbot.nnue_net import random_net
+from lcbot.move import move_from, move_to, move_flag
 
 PERFT_FENS = [
     "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
@@ -112,7 +108,7 @@ SPECIAL = {
 
 
 def _find(board, uci):
-    from uci import find_move_by_uci
+    from lcbot.uci import find_move_by_uci
     return find_move_by_uci(board, uci)
 
 

@@ -13,6 +13,7 @@ _UCI_OPTIONS = {
     "UseNNUE": ("use_nnue", "bool"),
     "NNUEPath": ("nnue_path", "str"),
     "NNUEMode": ("nnue_mode", "str"),
+    "Ponder": ("ponder", "bool"),
 }
 
 
@@ -26,6 +27,9 @@ class EngineConfig:
     use_nnue: bool = False
     nnue_path: str = ""
     nnue_mode: str = "hybrid"     # "hybrid" (base eval + residual) or "pure"
+    # Informational only: `go ponder` works regardless, but GUIs and
+    # lichess-bot look for this option before sending it.
+    ponder: bool = False
     tt_size_mb: int = 64
     # Not read anywhere.
     time_management_mode: str = "fixed"
@@ -42,6 +46,7 @@ class EngineConfig:
             "option name UseNNUE type check default false",
             "option name NNUEPath type string default <empty>",
             "option name NNUEMode type combo default hybrid var hybrid var pure",
+            "option name Ponder type check default false",
         ]
 
     def set_uci_option(self, name: str, value: str) -> bool:

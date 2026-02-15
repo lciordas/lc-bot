@@ -3,9 +3,9 @@
 Slow on purpose: tests check accumulator.py and nnue_packed.py against it.
 """
 
-from constants import WHITE
-from features import both_perspectives
-from nnue_net import NetParams
+from lcbot.constants import WHITE
+from lcbot.features import both_perspectives
+from lcbot.nnue_net import NetParams
 
 
 def crelu(x: float) -> float:
@@ -49,14 +49,14 @@ def evaluate_ref(net: NetParams, board, base_eval=None) -> int:
     if net.mode == "pure":
         return nn_cp(net, board)
     if base_eval is None:
-        from evaluation import evaluate as base_eval
+        from lcbot.evaluation import evaluate as base_eval
     return base_eval(board) + nn_cp(net, board)
 
 
 def _run_self_test() -> bool:
-    from board import Board
-    from evaluation import evaluate, _mirror_fen
-    from nnue_net import random_net, zero_net
+    from lcbot.board import Board
+    from lcbot.evaluation import evaluate, _mirror_fen
+    from lcbot.nnue_net import random_net, zero_net
     ok = True
 
     def check(label, cond):

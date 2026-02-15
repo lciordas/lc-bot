@@ -1,11 +1,11 @@
 import csv
 import time
 
-from board import STARTING_FEN
-from book import OpeningBook
-from config import EngineConfig
-from search import Searcher
-from selfplay import GameRecord, MatchSummary, Player, _summarize, log_match_result, play_game, play_match
+from lcbot.board import STARTING_FEN
+from lcbot.book import OpeningBook
+from lcbot.config import EngineConfig
+from lcbot.search import Searcher
+from lcbot.selfplay import GameRecord, MatchSummary, Player, _summarize, log_match_result, play_game, play_match
 from test_book import write_book
 
 

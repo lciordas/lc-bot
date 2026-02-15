@@ -8,8 +8,8 @@ colours' tables stay mirrored.
 from dataclasses import dataclass
 from typing import Callable
 
-import evaluation
-from board import Board
+from lcbot import evaluation
+from lcbot.board import Board
 
 _PIECE_NAMES = ("pawn", "knight", "bishop", "rook", "queen", "king")
 _MATERIAL_NAMES = _PIECE_NAMES[:5]  # king excluded: always 0
@@ -139,8 +139,8 @@ def tune(records, params=None, k=1.0, skip_plies=6, max_rounds=10, on_round=None
 if __name__ == "__main__":
     import sys
 
-    from config import EngineConfig
-    from selfplay import play_match, Player
+    from lcbot.config import EngineConfig
+    from lcbot.selfplay import play_match, Player
 
     def check(name, cond):
         print(f"  {'ok  ' if cond else 'FAIL'}  {name}")

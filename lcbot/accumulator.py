@@ -4,8 +4,8 @@ incrementally. A reference for the packed version in nnue_packed.py.
 push() saves state before a move and pop() restores it on unmake.
 """
 
-from constants import WHITE
-from features import feature_index, active_features
+from lcbot.constants import WHITE
+from lcbot.features import feature_index, active_features
 
 
 class FloatAccumulator:
@@ -69,7 +69,7 @@ class FloatAccumulator:
     # --- evaluation -------------------------------------------------------
     def raw(self, side_to_move):
         """Side-to-move-relative net output, before scale and clamp."""
-        from nnue_ref import crelu
+        from lcbot.nnue_ref import crelu
         net = self.net
         us, them = ((self.aw, self.ab) if side_to_move == WHITE
                     else (self.ab, self.aw))

@@ -1,7 +1,7 @@
 """_negamax/_quiescence tablebase probing against fake probers: WDL -> score signs, root never probed, piece-count guard."""
 
-from board import Board, STARTING_FEN
-from search import INF, TB_WIN_SCORE, Searcher
+from lcbot.board import Board, STARTING_FEN
+from lcbot.search import INF, TB_WIN_SCORE, Searcher
 
 
 class ConstantWDLTablebase:

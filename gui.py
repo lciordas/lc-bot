@@ -1,5 +1,22 @@
-"""Pygame GUI for lc-bot — play against the engine (or
-another human, or watch engine-vs-engine) with a mouse-driven board.
+"""Pygame board for playing lc-bot: human vs engine, engine vs engine, or
+human vs human. All rules come from the lcbot package.
+
+Run:
+    uv run python gui.py                       # human (white) vs engine (black)
+    uv run python gui.py --white engine --black human
+    uv run python gui.py --white engine --black engine   # watch two engine instances play
+    uv run python gui.py --depth 4              # fixed search depth instead of movetime
+    uv run python gui.py --movetime 3           # engine thinks for 3s/move (default: 1s)
+    uv run python gui.py --nnue                 # NNUE evaluation (shipping net)
+    uv run python gui.py --nnue nets/other.json # NNUE evaluation, a specific net
+
+Controls:
+    Mouse   - drag a piece, or click it then click a destination
+    Q/R/B/N - pick a promotion piece (or click an on-board icon)
+    N       - new game
+    F       - flip the board
+    U       - undo one ply
+    E       - toggle hand-written / NNUE eval (needs --nnue)
 """
 
 import argparse
@@ -9,12 +26,13 @@ import threading
 
 import pygame
 
-from board import Board, STARTING_FEN
-from constants import BLACK, KING, PIECE_CHARS, SQUARE_NAMES, WHITE
-from bitboard import lsb
-from move import move_from, move_to, move_to_uci
-from movegen import generate_legal_moves
-from search import Searcher
+from lcbot.board import Board, STARTING_FEN
+from lcbot.constants import BLACK, KING, PIECE_CHARS, SQUARE_NAMES, WHITE
+from lcbot.bitboard import lsb
+from lcbot.move import move_from, move_to, move_to_uci
+from lcbot.movegen import generate_legal_moves
+from lcbot.nnue import DEFAULT_NET, load_evaluator
+from lcbot.search import Searcher
 
 SQUARE_SIZE = 100
 BOARD_SIZE = SQUARE_SIZE * 8
@@ -105,8 +123,10 @@ class GameState:
     so it can be tested without a display."""
 
     def __init__(self, white_is_human: bool = True, black_is_human: bool = False,
-                 ai_depth: int = None, ai_movetime: float = 1.0):
+                 ai_depth: int = None, ai_movetime: float = 1.0, evaluator=None):
         self.board = Board(STARTING_FEN)
+        self.evaluator = evaluator
+        self.use_nnue = evaluator is not None
         self.white_is_human = white_is_human
         self.black_is_human = black_is_human
         self.ai_depth = ai_depth
@@ -119,9 +139,28 @@ class GameState:
         self.status = ""
         self.game_over = False
 
-        self.searcher = Searcher()
+        self.searcher = self._new_searcher()
         self._ai_thread = None
         self._ai_result = None  # single-item list, filled in by the background thread
+
+    def _new_searcher(self) -> Searcher:
+        return Searcher(evaluator=self.evaluator if self.use_nnue else None)
+
+    def eval_name(self) -> str:
+        return "NNUE" if self.use_nnue else "hand-written"
+
+    def toggle_eval(self) -> None:
+        """Toggle hand-written / NNUE eval. Ignored while the engine is thinking."""
+        if self._ai_thread is not None:
+            return
+        if self.evaluator is None:
+            self.status = "no NNUE net loaded (start with --nnue)"
+            return
+        self.use_nnue = not self.use_nnue
+        if not self.use_nnue:
+            self.board.nnue = None   # stop paying for accumulator updates
+        self.searcher = self._new_searcher()
+        self.status = f"engine eval: {self.eval_name()}"
 
     # --- turn / AI bookkeeping ---
 
@@ -236,7 +275,7 @@ class GameState:
         self.status = ""
         self.game_over = False
         self._ai_thread = None
-        self.searcher = Searcher()
+        self.searcher = self._new_searcher()
 
     def undo(self) -> None:
         if self._ai_thread is not None or not self.board.history:
@@ -357,6 +396,7 @@ def run(args) -> None:
         black_is_human=(args.black == "human"),
         ai_depth=args.depth,
         ai_movetime=args.movetime,
+        evaluator=load_evaluator(args.nnue) if args.nnue else None,
     )
 
     mousedown_sq = None
@@ -373,6 +413,8 @@ def run(args) -> None:
                     state.flipped = not state.flipped
                 elif event.key == pygame.K_u:
                     state.undo()
+                elif event.key == pygame.K_e:
+                    state.toggle_eval()
                 elif state.pending_promotion is not None and event.unicode.lower() in PROMO_CHOICES:
                     state.resolve_promotion(event.unicode.lower())
 
@@ -416,6 +458,9 @@ def main():
     parser.add_argument("--depth", type=int, default=None, help="fixed engine search depth")
     parser.add_argument("--movetime", type=float, default=1.0,
                          help="engine think time per move in seconds (ignored if --depth is given)")
+    parser.add_argument("--nnue", nargs="?", const=DEFAULT_NET, default=None, metavar="NET",
+                        help="evaluate with an NNUE net (default: the shipping net); "
+                             "E toggles it on/off in-game")
     args = parser.parse_args()
     run(args)
 

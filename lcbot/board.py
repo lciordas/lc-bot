@@ -4,19 +4,19 @@ history holds (move, captured_pt, captured_sq, castling, ep_square, halfmove,
 zobrist) per ply, with the state from before the move.
 """
 
-from constants import (
+from lcbot.constants import (
     A1, A8, BISHOP, BLACK, E1, E8, H1, H8, KING, KNIGHT, PAWN, QUEEN, ROOK, WHITE,
     BLACK_KING_SIDE, BLACK_QUEEN_SIDE, WHITE_KING_SIDE, WHITE_QUEEN_SIDE,
     SQUARE_INDEX, SQUARE_NAMES, FULL_BB,
 )
-from bitboard import lsb, popcount
-from move import (
+from lcbot.bitboard import lsb, popcount
+from lcbot.move import (
     FLAG_DOUBLE_PUSH, FLAG_EN_PASSANT, FLAG_KING_CASTLE, FLAG_QUEEN_CASTLE,
     FLAG_PROMO_N, FLAG_PROMO_Q_CAPTURE, PROMO_FLAG_TO_PIECE,
     move_flag, move_from, move_to,
 )
-from attacks import KING_ATTACKS, KNIGHT_ATTACKS, PAWN_ATTACKS, bishop_attacks, rook_attacks
-from zobrist import PIECE_KEYS, CASTLE_KEYS, EP_KEYS, SIDE_KEY, compute_hash
+from lcbot.attacks import KING_ATTACKS, KNIGHT_ATTACKS, PAWN_ATTACKS, bishop_attacks, rook_attacks
+from lcbot.zobrist import PIECE_KEYS, CASTLE_KEYS, EP_KEYS, SIDE_KEY, compute_hash
 
 
 STARTING_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"

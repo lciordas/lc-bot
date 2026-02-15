@@ -3,9 +3,9 @@
 Depths are high enough that futility (depth <= 3) and razoring (depth <= 2) fire throughout the tree.
 """
 
-from board import Board
-from move import move_to_uci
-from search import MATE_THRESHOLD, find_best_move
+from lcbot.board import Board
+from lcbot.move import move_to_uci
+from lcbot.search import MATE_THRESHOLD, find_best_move
 
 
 def test_rook_mate():

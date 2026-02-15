@@ -3,12 +3,12 @@
 Compares full move sets, which is stronger than perft node counts.
 """
 
-from board import Board
-from bitboard import lsb
-from constants import KING
-from move import move_from
-from movegen import _check_and_pin_info, _generate_legal_moves_reference, generate_legal_moves
-from perft import PERFT_SUITE
+from lcbot.board import Board
+from lcbot.bitboard import lsb
+from lcbot.constants import KING
+from lcbot.move import move_from
+from lcbot.movegen import _check_and_pin_info, _generate_legal_moves_reference, generate_legal_moves
+from lcbot.perft import PERFT_SUITE
 
 
 def _assert_matches_reference(board, context=""):
@@ -93,6 +93,6 @@ def test_en_passant_discovered_check():
     assert pseudo_ep_candidates != [], "test position has no legal replies at all"
     _assert_matches_reference(board, context="en passant discovered check")
 
-    from move import move_to_uci
+    from lcbot.move import move_to_uci
     fast_uci = {move_to_uci(m) for m in generate_legal_moves(board)}
     assert "e5d6" not in fast_uci, "illegal en passant capture (discovered check) was not excluded"

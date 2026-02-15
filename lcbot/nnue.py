@@ -1,10 +1,18 @@
-"""Runtime NNUE wiring: load a net, attach an accumulator, hand back an
-evaluator with the same signature and conventions as `evaluation.evaluate`.
+"""NNUE evaluator: a drop-in for `evaluation.evaluate` (side-to-move cp).
+
+The accumulator only tracks moves played on the board, so call `refresh`
+whenever the position is set from outside the search.
 """
 
-from evaluation import evaluate as hand_written
-from nnue_net import NetParams
-from nnue_packed import PackedNet, PackedAccumulator
+import os
+
+from lcbot.evaluation import evaluate as hand_written
+from lcbot.nnue_net import NetParams
+from lcbot.nnue_packed import PackedNet, PackedAccumulator
+
+# Best measured net (hybrid, output layer damped x0.3). Used when no NNUEPath is set.
+DEFAULT_NET = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "nets", "sf_hybrid_adv_damped.json")
 
 
 class NNUEEvaluator:
@@ -31,8 +39,12 @@ class NNUEEvaluator:
         self._acc = None
 
     def refresh(self, board):
-        """Re-sync after the position changed underneath us."""
-        if board.nnue is None:
+        """Re-sync after the position changed underneath us.
+
+        Re-attaches if the board's accumulator was built for a different net;
+        its lane layout would not match this net.
+        """
+        if board.nnue is None or board.nnue.pnet is not self.pnet:
             self.attach(board)
         else:
             board.nnue.refresh(board)
@@ -41,7 +53,7 @@ class NNUEEvaluator:
     # --- evaluation -------------------------------------------------------
     def __call__(self, board) -> int:
         acc = board.nnue
-        if acc is None:                     # not attached: fall back safely
+        if acc is None or acc.pnet is not self.pnet:   # not ours: rebuild safely
             acc = self.attach(board)
         nn = self.pnet.cp(acc.acc, board.side)
         if self.mode == "pure":

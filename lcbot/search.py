@@ -4,17 +4,17 @@ LMR, futility/razoring, singular extensions, aspiration windows."""
 import sys
 import time
 
-from bitboard import popcount
-from board import Board, STARTING_FEN
-from movegen import generate_legal_captures, generate_legal_moves
-from move import (
+from lcbot.bitboard import popcount
+from lcbot.board import Board, STARTING_FEN
+from lcbot.movegen import generate_legal_captures, generate_legal_moves
+from lcbot.move import (
     is_capture, move_flag, move_from, move_to, move_to_uci,
     FLAG_EN_PASSANT, FLAG_PROMO_N, PROMO_FLAG_TO_PIECE,
 )
-from evaluation import evaluate
-from constants import KNIGHT, BISHOP, ROOK, QUEEN
-from config import EngineConfig
-from see import see
+from lcbot.evaluation import evaluate
+from lcbot.constants import KNIGHT, BISHOP, ROOK, QUEEN
+from lcbot.config import EngineConfig
+from lcbot.see import see
 
 sys.setrecursionlimit(10000)
 
@@ -58,9 +58,13 @@ TT_EXACT, TT_LOWER, TT_UPPER = 0, 1, 2
 class Searcher:
     """Search state; the TT persists across searches."""
 
-    def __init__(self, config=None, tablebase=None):
+    def __init__(self, config=None, tablebase=None, evaluator=None):
         self.config = config or EngineConfig()
         self.tablebase = tablebase  # a tablebase.Tablebase, or None (disabled)
+        # None means the hand-written eval. All static evals go through
+        # `_eval` so pruning margins see the same score as leaves.
+        self.evaluator = evaluator
+        self._eval = evaluator if evaluator is not None else evaluate
         self._tt_max_entries = self._compute_tt_cap(self.config.tt_size_mb)
         self.tt = [None] * self._tt_max_entries
         self.nodes = 0
@@ -106,6 +110,11 @@ class Searcher:
         self.nodes = 0
         self.killers = [[0, 0] for _ in range(MAX_PLY)]
         self.history = [[0] * 64 for _ in range(64)]
+
+        # The accumulator only tracks make_move, so rebuild it for a board
+        # set up from outside.
+        if self.evaluator is not None:
+            self.evaluator.refresh(board)
 
         legal = generate_legal_moves(board)
         if not legal:
@@ -168,7 +177,7 @@ class Searcher:
         if self.stop:
             return 0
         if ply >= MAX_PLY:
-            return evaluate(board)
+            return self._eval(board)
 
         if ply > 0 and board.is_draw():
             return 0
@@ -230,7 +239,7 @@ class Searcher:
         # Razoring: eval far below alpha at low depth, drop to quiescence.
         if (not pv_node and not in_check and ply > 0 and 1 <= depth <= RAZOR_MAX_DEPTH
                 and beta < MATE_THRESHOLD):
-            razor_eval = evaluate(board)
+            razor_eval = self._eval(board)
             if razor_eval + RAZOR_MARGIN <= alpha:
                 score = self._quiescence(board, alpha, beta, ply)
                 if self.stop:
@@ -265,7 +274,7 @@ class Searcher:
             is_quiet = not (is_capture(m) or move_flag(m) >= FLAG_PROMO_N)
             consider_futility = futility_active and is_quiet and i > 0
             if consider_futility and futility_eval is None:
-                futility_eval = evaluate(board)
+                futility_eval = self._eval(board)
 
             # Make the move first: checking moves are never futility-pruned.
             board.make_move(m)
@@ -324,7 +333,7 @@ class Searcher:
         if self.stop:
             return 0
         if ply >= MAX_PLY:
-            return evaluate(board)
+            return self._eval(board)
 
         # Probe here too: captures in quiescence are how material usually
         # drops into tablebase range.
@@ -360,7 +369,7 @@ class Searcher:
             # without checking for legal moves.
             return 0
 
-        stand = evaluate(board)
+        stand = self._eval(board)
         if stand >= beta:
             return beta
         if stand > alpha:

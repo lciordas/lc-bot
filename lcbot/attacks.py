@@ -5,11 +5,11 @@ Python ints don't wrap, so `occ * magic` is masked with `& _FULL` before the shi
 
 import random
 
-from constants import (
+from lcbot.constants import (
     BLACK, WHITE, FULL_BB,
     NOT_FILE_A, NOT_FILE_H, NOT_FILE_AB, NOT_FILE_GH,
 )
-from bitboard import popcount
+from lcbot.bitboard import popcount
 
 _FULL = FULL_BB
 

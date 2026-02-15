@@ -4,8 +4,8 @@ hard limit must let iterative deepening use most of the soft target.
 
 import time
 
-from board import Board
-from search import LIMIT_CHECK_INTERVAL, Searcher
+from lcbot.board import Board
+from lcbot.search import LIMIT_CHECK_INTERVAL, Searcher
 
 KIWIPETE = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1"
 

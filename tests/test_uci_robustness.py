@@ -7,9 +7,9 @@ skips unmake_move calls, so the board is restored from a FEN snapshot.
 
 import io
 
-from board import Board
-from movegen import generate_legal_moves
-from uci import UCIEngine
+from lcbot.board import Board
+from lcbot.movegen import generate_legal_moves
+from lcbot.uci import UCIEngine
 
 
 def make_engine():
@@ -47,7 +47,7 @@ def test_exception_restores_board():
 
 
 def test_exception_bestmove_legal():
-    from move import move_to_uci
+    from lcbot.move import move_to_uci
 
     e = make_engine()
     e.searcher.tablebase = _ExplodingTablebase()

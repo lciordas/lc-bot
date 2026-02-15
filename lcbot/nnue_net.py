@@ -1,4 +1,13 @@
-"""NNUE float weights and JSON file format."""
+"""NNUE float weights and JSON file format.
+
+    a[p]   = bias + sum(W[f] for f in active_features(pos, p))   # per perspective
+    nn_raw = sum_k v[k] * (crelu(a[us][k]) - crelu(a[them][k]))
+    nn_cp  = clamp(round(nn_raw * scale), -clampcp, +clampcp)
+
+The single output vector v, shared by both perspectives with opposite signs,
+keeps the eval exactly antisymmetric. Modes: "hybrid" adds nn_cp to the
+hand-written eval (a learned residual); "pure" uses nn_cp alone.
+"""
 
 import json
 

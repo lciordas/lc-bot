@@ -1,6 +1,6 @@
-from board import Board, STARTING_FEN
-from config import EngineConfig
-from search import Searcher
+from lcbot.board import Board, STARTING_FEN
+from lcbot.config import EngineConfig
+from lcbot.search import Searcher
 
 
 def test_default_config():

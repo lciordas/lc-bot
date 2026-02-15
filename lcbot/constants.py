@@ -1,4 +1,19 @@
-"""Bitboard constants, piece / color enums, file & rank masks."""
+"""Bitboard constants, piece / color enums, file & rank masks.
+
+Square mapping is little-endian rank-file (LERF):
+    a1 = 0, b1 = 1, ..., h1 = 7, a2 = 8, ..., h8 = 63
+    sq = rank * 8 + file
+
+With LERF the bit-shift directions are:
+    bb << 8   north  (rank + 1)
+    bb >> 8   south  (rank - 1)
+    bb << 1   east   (file + 1)   masked with NOT_FILE_A
+    bb >> 1   west   (file - 1)   masked with NOT_FILE_H
+    bb << 9   north-east           masked with NOT_FILE_A
+    bb << 7   north-west           masked with NOT_FILE_H
+    bb >> 7   south-east           masked with NOT_FILE_A
+    bb >> 9   south-west           masked with NOT_FILE_H
+"""
 
 # --- Piece types (indices into pieces[color][type]) ---
 PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING = range(6)

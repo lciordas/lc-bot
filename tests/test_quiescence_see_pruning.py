@@ -1,8 +1,8 @@
 """SEE pruning in quiescence must not let a losing capture distort the result."""
 
-from board import Board
-from move import move_to_uci
-from search import Searcher
+from lcbot.board import Board
+from lcbot.move import move_to_uci
+from lcbot.search import Searcher
 
 
 def test_skips_losing_capture():
@@ -15,7 +15,7 @@ def test_skips_losing_capture():
 
 
 def test_qsearch_losing_capture():
-    from movegen import generate_legal_captures
+    from lcbot.movegen import generate_legal_captures
 
     b = Board("4k2r/8/2p5/3p4/8/8/3Q3R/4K3 w - - 0 1")
     s = Searcher()

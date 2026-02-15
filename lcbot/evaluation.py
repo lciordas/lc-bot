@@ -5,9 +5,9 @@ Every term is antisymmetric under a colour flip. Tables are written in reading
 order (index 0 = a8); white reads table[sq ^ 56], black reads table[sq].
 """
 
-from constants import WHITE, BLACK, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, FILES
-from bitboard import popcount, iter_bits, lsb
-from attacks import KNIGHT_ATTACKS, bishop_attacks, rook_attacks, queen_attacks
+from lcbot.constants import WHITE, BLACK, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, FILES
+from lcbot.bitboard import popcount, iter_bits, lsb
+from lcbot.attacks import KNIGHT_ATTACKS, bishop_attacks, rook_attacks, queen_attacks
 
 
 # --- Material, by piece type. A list so tuning.py can mutate it. ---
@@ -475,7 +475,7 @@ def _mirror_fen(fen: str) -> str:
 
 
 def _run_self_test() -> bool:
-    from board import STARTING_FEN, Board
+    from lcbot.board import STARTING_FEN, Board
 
     ok = True
 

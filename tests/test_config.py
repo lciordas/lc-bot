@@ -1,4 +1,4 @@
-from config import EngineConfig
+from lcbot.config import EngineConfig
 
 
 def test_defaults():

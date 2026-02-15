@@ -5,11 +5,11 @@ The king may recapture like any other piece, even into check; fine for a
 heuristic.
 """
 
-from attacks import KING_ATTACKS, KNIGHT_ATTACKS, PAWN_ATTACKS, bishop_attacks, rook_attacks
-from bitboard import lsb
-from constants import BISHOP, BLACK, KING, KNIGHT, PAWN, QUEEN, ROOK, WHITE
-from evaluation import PIECE_VALUE
-from move import FLAG_EN_PASSANT, PROMO_FLAG_TO_PIECE, is_capture, move_flag, move_from, move_to
+from lcbot.attacks import KING_ATTACKS, KNIGHT_ATTACKS, PAWN_ATTACKS, bishop_attacks, rook_attacks
+from lcbot.bitboard import lsb
+from lcbot.constants import BISHOP, BLACK, KING, KNIGHT, PAWN, QUEEN, ROOK, WHITE
+from lcbot.evaluation import PIECE_VALUE
+from lcbot.move import FLAG_EN_PASSANT, PROMO_FLAG_TO_PIECE, is_capture, move_flag, move_from, move_to
 
 
 def _attackers_to(board, sq: int, occ: int) -> int:

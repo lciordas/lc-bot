@@ -1,7 +1,7 @@
 [project]
-name = "final-engine"
+name = "lc-bot"
 version = "0.1.0"
-description = "Pure-Python bitboard chess engine."
+description = "Pure-Python bitboard chess engine with a switchable NNUE evaluation, UCI, and a Lichess bot."
 authors = [
     { name = "Lucas Ciordas", email = "22lciordas@gmail.com" }
 ]
@@ -17,9 +17,18 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
 ]
+# Only train.py needs torch; the engine itself runs on the standard library.
+# Install with: uv sync --group train
+train = [
+    "torch>=2.0.0",
+]
 
-[tool.uv]
-package = false
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["lcbot"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -4,19 +4,19 @@ Castling is fully checked at generation time. _generate_legal_moves_reference is
 the slow make/unmake version, used by tests as an oracle.
 """
 
-from constants import (
+from lcbot.constants import (
     A1, A8, BISHOP, BLACK, FULL_BB, H1, H8, KING, KNIGHT, PAWN, QUEEN, ROOK,
     RANKS, WHITE, BLACK_KING_SIDE, BLACK_QUEEN_SIDE,
     WHITE_KING_SIDE, WHITE_QUEEN_SIDE,
 )
-from bitboard import iter_bits, lsb, popcount
-from move import (
+from lcbot.bitboard import iter_bits, lsb, popcount
+from lcbot.move import (
     FLAG_CAPTURE, FLAG_DOUBLE_PUSH, FLAG_EN_PASSANT, FLAG_KING_CASTLE,
     FLAG_PROMO_B, FLAG_PROMO_B_CAPTURE, FLAG_PROMO_N, FLAG_PROMO_N_CAPTURE,
     FLAG_PROMO_Q, FLAG_PROMO_Q_CAPTURE, FLAG_PROMO_R, FLAG_PROMO_R_CAPTURE,
     FLAG_QUEEN_CASTLE, FLAG_QUIET, encode_move, move_flag, move_from, move_to,
 )
-from attacks import (
+from lcbot.attacks import (
     KING_ATTACKS, KNIGHT_ATTACKS, PAWN_ATTACKS, SQUARES_BETWEEN,
     bishop_attacks, queen_attacks, rook_attacks,
 )

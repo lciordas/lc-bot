@@ -1,6 +1,6 @@
 import pytest
 
-from time_management import MAX_FRACTION_OF_REMAINING, TimeBudget, compute_budget
+from lcbot.time_management import MAX_FRACTION_OF_REMAINING, TimeBudget, compute_budget
 
 
 def test_hard_at_least_soft():

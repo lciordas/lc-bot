@@ -1,13 +1,33 @@
-"""Multiprocessing root-splitting search parallelism."""
+"""Fixed-depth root-splitting search across processes (the GIL rules out threads).
+
+PVS at the root: the first move gets a full window to set alpha, the rest get
+null-window searches in workers, fail-highs are re-searched. Workers share no TT.
+"""
 
 import os
 import multiprocessing as mp
 
-from movegen import generate_legal_moves
-from search import INF, Searcher
-from tablebase import Tablebase
+from lcbot.movegen import generate_legal_moves
+from lcbot.nnue import load_evaluator
+from lcbot.search import INF, Searcher
+from lcbot.tablebase import Tablebase
 
 MIN_PARALLEL_DEPTH = 3
+
+# One NNUE evaluator per (path, mode), per process: quantising a net is ~0.3s.
+_EVALUATORS = {}
+
+
+def _evaluator_for(nnue_path, nnue_mode):
+    """Cached NNUEEvaluator for this net, or None for the hand-written eval.
+    Load errors propagate; validate the net first if you want a fallback."""
+    if not nnue_path:
+        return None
+    key = (nnue_path, nnue_mode)
+    ev = _EVALUATORS.get(key)
+    if ev is None:
+        ev = _EVALUATORS[key] = load_evaluator(nnue_path, nnue_mode)
+    return ev
 
 
 def _split_round_robin(moves, num_workers):
@@ -40,23 +60,17 @@ def _open_tablebase(tablebase_path):
 
 
 def _search_bucket_null_window(args):
-    """Worker entry point (must be a module-level function: multiprocessing
-        on this platform uses 'spawn', which pickles the callable by reference).
-        Null-window-tests every move in `moves` against `alpha` (the score of
-        the best move found so far, established sequentially before this call
-        -- see parallel_find_best_move). Returns (results, nodes), where
-        `results` is a list of (move, score, failed_high) -- failed_high moves
-        need a full-window re-search back in the caller to get their true score,
-        matching normal PVS's own re-search-on-fail-high pattern.
-    """
-    board, moves, depth, alpha, killers, history, tablebase_path = args
-    # A live Tablebase wraps an open file handle and isn't picklable across
-    # processes -- each worker opens its own from the path instead (mirrors
-    # uci.py's own per-session Tablebase lifecycle, just one per worker
-    # rather than one per UCI session).
+    """Worker: null-window test each move against `alpha`. Module-level so
+    'spawn' can pickle it. Returns ([(move, score, failed_high)], nodes)."""
+    board, moves, depth, alpha, killers, history, tablebase_path, nnue_path, nnue_mode = args
+    # A Tablebase holds open file handles and can't be pickled; open one per worker.
     tablebase = _open_tablebase(tablebase_path)
     try:
-        searcher = Searcher(tablebase=tablebase)
+        evaluator = _evaluator_for(nnue_path, nnue_mode)
+        searcher = Searcher(tablebase=tablebase, evaluator=evaluator)
+        if evaluator is not None:
+            # The accumulator was stripped before pickling; rebuild it.
+            evaluator.refresh(board)
         searcher.killers = killers
         searcher.history = history
         results = []
@@ -70,26 +84,26 @@ def _search_bucket_null_window(args):
 
 
 def parallel_find_best_move(board, depth: int, num_workers: int = None, pool: mp.Pool = None,
-                             tablebase_path: str = None):
-    """Root-split search to a fixed `depth` across `num_workers` processes
-        (defaults to os.cpu_count()). Returns (best_move, best_score) -- the same
-        2-tuple contract as search.find_best_move, so it's a drop-in alternative
-        at call sites that don't need the sequential engine's movetime support.
-        See the module docstring for the algorithm and why it isn't simpler.
-    """
+                             tablebase_path: str = None, nnue_path: str = None,
+                             nnue_mode: str = "hybrid"):
+    """Root-split search to a fixed `depth` on `num_workers` processes
+    (default os.cpu_count()). Returns (best_move, best_score) like
+    search.find_best_move. `tablebase_path` and `nnue_path` apply to every
+    Searcher, sequential and worker."""
     num_workers = num_workers or os.cpu_count() or 1
     moves = generate_legal_moves(board)
     if not moves:
         return 0, 0
 
+    evaluator = _evaluator_for(nnue_path, nnue_mode)
     tablebase = _open_tablebase(tablebase_path)
     try:
         if len(moves) == 1 or num_workers <= 1 or depth < MIN_PARALLEL_DEPTH:
-            searcher = Searcher(tablebase=tablebase)
+            searcher = Searcher(tablebase=tablebase, evaluator=evaluator)
             return searcher.search(board, max_depth=depth)
 
         # Step 1: sequential warm-up.
-        probe = Searcher(tablebase=tablebase)
+        probe = Searcher(tablebase=tablebase, evaluator=evaluator)
         probe.search(board, max_depth=depth - 1)
         ordered = probe._order_moves(board, moves, probe.best_move_root, 0)
 
@@ -102,14 +116,21 @@ def parallel_find_best_move(board, depth: int, num_workers: int = None, pool: mp
 
         # Step 3: every remaining move, null window, in parallel.
         buckets = _split_round_robin(rest, num_workers)
-        tasks = [(board, bucket, depth, best_score, probe.killers, probe.history, tablebase_path)
+        tasks = [(board, bucket, depth, best_score, probe.killers, probe.history, tablebase_path,
+                  nnue_path, nnue_mode)
                  for bucket in buckets]
 
-        if pool is not None:
-            raw_results = pool.map(_search_bucket_null_window, tasks)
-        else:
-            with mp.Pool(processes=len(buckets)) as owned_pool:
-                raw_results = owned_pool.map(_search_bucket_null_window, tasks)
+        # Strip the accumulator so the quantised net isn't pickled with every
+        # task. pool.map pickles before returning, so restoring after is safe.
+        acc, board.nnue = board.nnue, None
+        try:
+            if pool is not None:
+                raw_results = pool.map(_search_bucket_null_window, tasks)
+            else:
+                with mp.Pool(processes=len(buckets)) as owned_pool:
+                    raw_results = owned_pool.map(_search_bucket_null_window, tasks)
+        finally:
+            board.nnue = acc
 
         fail_highs = [m for move_results, _nodes in raw_results for m, _s, failed in move_results if failed]
 
@@ -128,9 +149,9 @@ def parallel_find_best_move(board, depth: int, num_workers: int = None, pool: mp
 # --- self-test ------------------------------------------------------------
 
 def _run_self_test() -> bool:
-    from board import Board
-    from move import move_to_uci
-    from search import MATE_THRESHOLD
+    from lcbot.board import Board
+    from lcbot.move import move_to_uci
+    from lcbot.search import MATE_THRESHOLD
 
     ok = True
 

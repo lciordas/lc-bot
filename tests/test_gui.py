@@ -3,10 +3,10 @@
 import pytest
 
 import gui
-from board import Board, STARTING_FEN
-from constants import SQUARE_INDEX, WHITE, BLACK
-from move import move_to_uci
-from movegen import generate_legal_moves
+from lcbot.board import Board, STARTING_FEN
+from lcbot.constants import SQUARE_INDEX, WHITE, BLACK
+from lcbot.move import move_to_uci
+from lcbot.movegen import generate_legal_moves
 
 
 # --- coordinate math ---

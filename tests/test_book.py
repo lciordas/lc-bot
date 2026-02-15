@@ -5,10 +5,10 @@ import chess
 import chess.polyglot
 import pytest
 
-from board import STARTING_FEN, Board
-from book import OpeningBook
-from move import move_to_uci
-from movegen import generate_legal_moves
+from lcbot.board import STARTING_FEN, Board
+from lcbot.book import OpeningBook
+from lcbot.move import move_to_uci
+from lcbot.movegen import generate_legal_moves
 
 
 def write_book(tmp_path, entries):
@@ -65,7 +65,7 @@ def test_not_in_book(tmp_path):
 
 def test_missing_file():
     with pytest.raises(FileNotFoundError):
-        OpeningBook("/tmp/definitely-not-a-real-book-xyz-final-engine.bin")
+        OpeningBook("/tmp/definitely-not-a-real-book-xyz-lc-bot.bin")
 
 
 def test_only_legal_moves(tmp_path):

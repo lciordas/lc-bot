@@ -46,10 +46,7 @@ if __name__ == "__main__":
     import struct
     import sys
     import tempfile
-    from pathlib import Path
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from board import STARTING_FEN, Board
+    from lcbot.board import STARTING_FEN, Board
 
     def check(name, cond):
         print(f"  {'ok  ' if cond else 'FAIL'}  {name}")
@@ -94,8 +91,8 @@ if __name__ == "__main__":
                     deterministic == book.best_move_uci(b, rng=_random.Random(1)))
 
         after_e4 = Board(STARTING_FEN)
-        from movegen import generate_legal_moves
-        from move import move_to_uci
+        from lcbot.movegen import generate_legal_moves
+        from lcbot.move import move_to_uci
         mv = next(m for m in generate_legal_moves(after_e4) if move_to_uci(m) == "e2e4")
         after_e4.make_move(mv)
         ok &= check("position not in book returns None", book.best_move_uci(after_e4) is None)

@@ -1,7 +1,7 @@
 import io
 
 from test_book import write_book
-from uci import UCIEngine
+from lcbot.uci import UCIEngine
 
 
 def make_engine():
@@ -46,7 +46,7 @@ def test_out_of_book(tmp_path):
 
 def test_bad_book_path(tmp_path):
     e = make_engine()
-    e.cmd_setoption(["name", "BookPath", "value", "/tmp/not-a-real-book-final-engine.bin"])
+    e.cmd_setoption(["name", "BookPath", "value", "/tmp/not-a-real-book-lc-bot.bin"])
     e.cmd_setoption(["name", "OwnBook", "value", "true"])
     e.cmd_go(["depth", "2"])
     e.wait_for_search(timeout=15)

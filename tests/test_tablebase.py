@@ -2,13 +2,13 @@
 
 import pytest
 
-from board import Board
-from tablebase import Tablebase
+from lcbot.board import Board
+from lcbot.tablebase import Tablebase
 
 
 def test_missing_dir():
     with pytest.raises(FileNotFoundError):
-        Tablebase("/tmp/definitely-not-a-real-tb-dir-final-engine")
+        Tablebase("/tmp/definitely-not-a-real-tb-dir-lc-bot")
 
 
 def test_empty_dir(tmp_path):

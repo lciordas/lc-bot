@@ -3,8 +3,8 @@
 import sys
 import time
 
-from board import STARTING_FEN, Board
-from movegen import generate_legal_moves
+from lcbot.board import STARTING_FEN, Board
+from lcbot.movegen import generate_legal_moves
 
 
 def perft(board: Board, depth: int) -> int:

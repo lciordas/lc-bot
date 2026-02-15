@@ -4,8 +4,8 @@ Both sides run the same iterative deepening so killers/history/TT state match;
 comparing against a single isolated depth gives spurious differences.
 """
 
-import search
-from board import Board, STARTING_FEN
+from lcbot import search
+from lcbot.board import Board, STARTING_FEN
 
 POSITIONS = [
     STARTING_FEN,

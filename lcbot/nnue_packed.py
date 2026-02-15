@@ -1,9 +1,30 @@
 """Packed integer NNUE: the whole accumulator (both perspectives) is one
 Python int of 16-bit lanes, so a feature change is one big-int add.
+
+Lane layout. Let `pos` be the hidden units with a positive output weight and
+`neg` the rest, and let G_k = round(K * |v_k|) be the per-unit gain:
+
+    block0 (lanes 0 .. N-1)     block1 (lanes N .. 2N-1)
+      pos units, White persp.     pos units, Black persp.
+      neg units, Black persp.     neg units, White persp.
+
+so that, with every lane clamped to [0, G_k],
+
+    sum(block0) - sum(block1) = K * sum_k v_k (crelu(a_W[k]) - crelu(a_B[k]))
+
+which is K * nn_raw for White to move, and its negation for Black. The sign of
+v_k is carried by the block, the magnitude by the lane's clamp ceiling, so the
+head needs no multiplies: a SWAR clamp, then one modular reduction per block
+(2^16 == 1 mod 2^16-1).
+
+Invariants, checked at build time:
+  1. sum(G) <= 65534 per block, or the modular horizontal sum wraps.
+  2. Every lane stays in [0, 2^15) for any legal piece placement, or it borrows
+     from its neighbour. Checked over the maximum legal piece multiset.
 """
 
-from constants import WHITE, BLACK, PIECE_TYPES
-from features import feature_index
+from lcbot.constants import WHITE, BLACK, PIECE_TYPES
+from lcbot.features import feature_index
 
 L = 16                        # bits per lane
 VBITS = L - 1                 # bit 15 is the borrow guard

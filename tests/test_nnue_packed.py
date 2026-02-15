@@ -4,19 +4,15 @@ Antisymmetry matters because the TT assumes score(side) == -score(other side).
 """
 
 import random
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
 
-from board import Board
-from movegen import generate_legal_moves
-from nnue_net import random_net
-from nnue_packed import PackedNet, PackedAccumulator
-from nnue_ref import nn_cp
-from evaluation import _mirror_fen
+from lcbot.board import Board
+from lcbot.movegen import generate_legal_moves
+from lcbot.nnue_net import random_net
+from lcbot.nnue_packed import PackedNet, PackedAccumulator
+from lcbot.nnue_ref import nn_cp
+from lcbot.evaluation import _mirror_fen
 
 FENS = [
     "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
@@ -47,7 +43,7 @@ def _walk_positions(seed=0, walks=3, plies=25):
 def test_gain_sums_fit():
     """sum(G) <= 65534 per block, or the modular reduction wraps silently."""
     lanes = PNET.lanes
-    from nnue_packed import unpacklanes, SUM_LIMIT
+    from lcbot.nnue_packed import unpacklanes, SUM_LIMIT
     gains = unpacklanes(PNET.gp, lanes)
     assert sum(gains[:PNET.N]) <= SUM_LIMIT
     assert sum(gains[PNET.N:]) <= SUM_LIMIT
@@ -119,7 +115,7 @@ def test_unmake(fen):
 
 def test_zero_net():
     """A zero net must evaluate to exactly 0 after quantisation too."""
-    from nnue_net import zero_net
+    from lcbot.nnue_net import zero_net
     z = PackedNet(zero_net(N=8), gain=1.0)
     for fen in FENS:
         b = Board(fen)

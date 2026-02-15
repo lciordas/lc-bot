@@ -6,7 +6,7 @@ seed so keys, and therefore searches, are reproducible.
 
 import random
 
-from constants import WHITE, BLACK
+from lcbot.constants import WHITE, BLACK
 
 _rng = random.Random(0xC0FFEE)
 

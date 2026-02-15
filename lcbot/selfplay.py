@@ -5,13 +5,13 @@ import os
 import time
 from dataclasses import dataclass, field
 
-from board import Board, STARTING_FEN
-from config import EngineConfig
-from constants import BLACK, WHITE
-from move import move_to_uci
-from movegen import generate_legal_moves
-from search import Searcher
-from uci import find_move_by_uci
+from lcbot.board import Board, STARTING_FEN
+from lcbot.config import EngineConfig
+from lcbot.constants import BLACK, WHITE
+from lcbot.move import move_to_uci
+from lcbot.movegen import generate_legal_moves
+from lcbot.search import Searcher
+from lcbot.uci import find_move_by_uci
 
 
 @dataclass

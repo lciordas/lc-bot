@@ -2,10 +2,10 @@
 
 import random
 
-from board import Board
-from move import is_capture, is_promotion
-from movegen import generate_legal_captures, generate_legal_moves
-from perft import PERFT_SUITE
+from lcbot.board import Board
+from lcbot.move import is_capture, is_promotion
+from lcbot.movegen import generate_legal_captures, generate_legal_moves
+from lcbot.perft import PERFT_SUITE
 
 
 def _noisy(moves):

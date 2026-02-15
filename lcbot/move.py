@@ -3,7 +3,7 @@
 Promotion flags are >= 8; promotion captures are >= 12.
 """
 
-from constants import SQUARE_NAMES
+from lcbot.constants import SQUARE_NAMES
 
 # Move flags (4 bits)
 FLAG_QUIET = 0

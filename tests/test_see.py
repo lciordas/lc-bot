@@ -1,9 +1,9 @@
 """Static Exchange Evaluation tests, with expected values worked out by hand."""
 
-from board import Board
-from move import move_to_uci
-from movegen import generate_legal_moves
-from see import see
+from lcbot.board import Board
+from lcbot.move import move_to_uci
+from lcbot.movegen import generate_legal_moves
+from lcbot.see import see
 
 
 def find_move(board, uci):
