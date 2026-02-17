@@ -2,7 +2,7 @@
 
 Scores are side-to-move centipawns; mates are clamped to +/-CLAMP rather than dropped.
 
-    uv run python relabel_sf.py --inp data/train.jsonl --out data/train_sf.jsonl
+    uv run python tools/relabel_sf.py --inp data/train.jsonl --out data/train_sf.jsonl
 """
 import argparse
 import json

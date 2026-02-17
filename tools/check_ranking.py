@@ -3,18 +3,18 @@
 Search depends on ranking siblings correctly and on large errors, not mean
 error, so this reports top-1 agreement with Stockfish and error percentiles.
 
-    uv run python check_ranking.py
+    uv run python tools/check_ranking.py
 """
 import random
 
 import chess
 import chess.engine
 
-from board import Board
-from evaluation import evaluate
-from movegen import generate_legal_moves
-from nnue import load_evaluator
-from uci import move_to_uci
+from lcbot.board import Board
+from lcbot.evaluation import evaluate
+from lcbot.movegen import generate_legal_moves
+from lcbot.nnue import load_evaluator
+from lcbot.uci import move_to_uci
 
 SF = "/opt/homebrew/bin/stockfish"
 

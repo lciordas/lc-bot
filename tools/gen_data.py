@@ -1,4 +1,11 @@
-"""Generate NNUE training data from self-play, labelled by this engine's search."""
+"""Generate NNUE training data from self-play, labelled by this engine's search.
+
+Each JSONL record has the teacher search score and the static eval (both
+side-to-move centipawns) and the game result for the mover (+1/0/-1).
+Positions in check or whose best move is a capture are skipped.
+
+    uv run python tools/gen_data.py --out data/train.jsonl --positions 200000
+"""
 import argparse
 import json
 import os
@@ -7,11 +14,11 @@ import sys
 import time
 from multiprocessing import Process, Queue
 
-from board import Board
-from evaluation import evaluate
-from movegen import generate_legal_moves
-from move import move_flag, FLAG_CAPTURE, FLAG_EN_PASSANT
-from search import Searcher
+from lcbot.board import Board
+from lcbot.evaluation import evaluate
+from lcbot.movegen import generate_legal_moves
+from lcbot.move import move_flag, FLAG_CAPTURE, FLAG_EN_PASSANT
+from lcbot.search import Searcher
 
 MAX_PLIES = 160
 RANDOM_OPENING_PLIES = 8      # random legal moves, for opening diversity

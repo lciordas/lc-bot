@@ -1,4 +1,12 @@
-"""Train the NNUE net (PyTorch) and export it in nnue_net's JSON format."""
+"""Train the NNUE net (PyTorch) and export it in nnue_net's JSON format.
+
+One hidden layer, shared output weights across both perspectives (keeps the
+eval antisymmetric), clamp(0, 1) activation to match the engine. Loss is MSE on
+sigmoid win probability; in hybrid mode the net learns a residual over the
+hand-written eval.
+
+    uv run python tools/train.py --data data/train_sf.jsonl --label sf_score --out nets/net.json
+"""
 import argparse
 import json
 import math
@@ -9,8 +17,8 @@ import time
 import torch
 import torch.nn as nn
 
-from board import Board
-from features import active_features
+from lcbot.board import Board
+from lcbot.features import active_features
 
 
 class NNUE(nn.Module):
@@ -210,7 +218,7 @@ def main():
 
 def export(model, path, mode):
     """Write float weights in nnue_net's JSON format."""
-    from nnue_net import NetParams, DEFAULT_CLAMP_CP, PURE_CLAMP_CP
+    from lcbot.nnue_net import NetParams, DEFAULT_CLAMP_CP, PURE_CLAMP_CP
     W = model.ft.weight.detach().cpu().tolist()
     bias = model.bias.detach().cpu().tolist()
     v = model.v.detach().cpu().tolist()

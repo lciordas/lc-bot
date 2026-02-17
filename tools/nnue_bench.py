@@ -2,14 +2,14 @@
 
 Uses random weights, so only the timings mean anything.
 
-    uv run python nnue_bench.py
+    uv run python tools/nnue_bench.py
 """
 import time
 
-from board import Board
-from search import Searcher
-from nnue_net import random_net
-from nnue import evaluator_from_net
+from lcbot.board import Board
+from lcbot.search import Searcher
+from lcbot.nnue_net import random_net
+from lcbot.nnue import evaluator_from_net
 
 KIWIPETE = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1"
 START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"

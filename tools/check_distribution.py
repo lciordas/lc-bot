@@ -3,17 +3,17 @@
 The net is trained on quiet positions, but search also evaluates quiescence
 leaves where captures are pending, so error is reported for both sets.
 
-    uv run python check_distribution.py
+    uv run python tools/check_distribution.py
 """
 import random
 
 import chess
 import chess.engine
 
-from board import Board
-from evaluation import evaluate
-from movegen import generate_legal_moves
-from nnue import load_evaluator
+from lcbot.board import Board
+from lcbot.evaluation import evaluate
+from lcbot.movegen import generate_legal_moves
+from lcbot.nnue import load_evaluator
 
 SF = "/opt/homebrew/bin/stockfish"
 
