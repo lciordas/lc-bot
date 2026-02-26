@@ -13,3 +13,19 @@ wheels/
 # Test artifacts
 .pytest_cache/
 
+# macOS
+.DS_Store
+
+# NNUE artifacts
+*.nnue
+*.pickle
+data/
+# only the shipped nets are tracked
+nets/*
+!nets/sf_hybrid_damped.json
+!nets/sf_hybrid_adv_damped.json
+matches/*.log
+train_*.log
+
+# lichess-bot checkout (config.yml has the account token)
+lichess-bot/
